@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TaskLog — 達成が積み重なるタスク管理",
-  description: "1分から始められる、達成ログが積み重なるタスク管理アプリ",
+  title: "TaskLog v2 — 気になってる事を置く場所",
+  description: "気になってる事を気軽に置いて、触れたら積み上がる。手放しても咎められない。",
 };
 
 export default function RootLayout({
