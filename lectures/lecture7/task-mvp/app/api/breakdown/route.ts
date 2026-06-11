@@ -1,27 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
-
-const SCHEMA = {
-  type: "object",
-  properties: {
-    steps: {
-      type: "array",
-      items: { type: "string" },
-      description: "最初の1分でできる具体的な行動。3つ。",
-    },
-  },
-  required: ["steps"],
-  additionalProperties: false,
-} as const;
-
-const SYSTEM = `あなたは「やる気が出ない日でも動ける最初の一歩」を設計するコーチ。
-渡されたタスクに対して、最初の1分以内に物理的に完了できる行動を3つ提案する。
-
-ルール:
-- 各提案は30文字以内
-- 「考える」「調べる」のような曖昧な動詞ではなく、「〜を開く」「〜を1行書く」「〜を1つ出す」のように完了が目に見える行動にする
-- 3つは粒度や角度を変える（環境を整える系 / 着手する系 / 分解する系 など）
-- 説教やはげましは書かない。行動だけ。`;
-
 // タスク名の語からタスクの種類を判定して、種類に合った1分ステップを返す。
 // 上から順に最初にマッチした規則を使うので、語が重なる規則ほど先に置く
 // （例:「書類」は手続き系。書く系の/書/より先に判定しないと誤爆する）。
@@ -108,7 +84,7 @@ const RULES: { pattern: RegExp; steps: (t: string) => string[] }[] = [
   },
 ];
 
-function fallbackSteps(title: string): string[] {
+function suggestSteps(title: string): string[] {
   const rule = RULES.find((r) => r.pattern.test(title));
   if (rule) return rule.steps(title);
   return [
@@ -129,31 +105,5 @@ export async function POST(request: Request) {
     return Response.json({ error: "title required" }, { status: 400 });
   }
   const t = title.trim().slice(0, 200);
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return Response.json({ steps: fallbackSteps(t), source: "builtin" });
-  }
-
-  try {
-    const client = new Anthropic();
-    const response = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 512,
-      system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: `タスク: ${t}`,
-        },
-      ],
-      output_config: { format: { type: "json_schema", schema: SCHEMA } },
-    });
-    const text = response.content.find((b) => b.type === "text")?.text ?? "";
-    const parsed = JSON.parse(text) as { steps: string[] };
-    const steps = parsed.steps.filter((s) => typeof s === "string").slice(0, 3);
-    if (steps.length === 0) throw new Error("empty steps");
-    return Response.json({ steps, source: "ai" });
-  } catch {
-    return Response.json({ steps: fallbackSteps(t), source: "builtin" });
-  }
+  return Response.json({ steps: suggestSteps(t), source: "rules" });
 }
