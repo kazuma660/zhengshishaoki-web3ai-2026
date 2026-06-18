@@ -12,11 +12,19 @@ type Item = {
   deadline?: string;
   miniStep?: string;
   isToday?: boolean;
+  isTomorrow?: boolean;
   parentId?: string;
   completedAt?: number;
+  missedAt?: number;
 };
 
 const STORAGE_ITEMS = "tasklog:items:v2";
+const STORAGE_LAST_SEEN = "tasklog:lastSeen";
+
+function dateKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export default function Home() {
   const [items, setItems] = useState<Item[]>([]);
@@ -42,7 +50,31 @@ export default function Home() {
     if (hydrated) localStorage.setItem(STORAGE_ITEMS, JSON.stringify(items));
   }, [items, hydrated]);
 
-  function addItem(asToday: boolean) {
+  useEffect(() => {
+    if (!hydrated) return;
+    const todayKey = dateKey(Date.now());
+    const lastSeen = localStorage.getItem(STORAGE_LAST_SEEN);
+    if (lastSeen && lastSeen !== todayKey) {
+      const now = Date.now();
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.isTomorrow) {
+            const { isTomorrow: _, ...rest } = it;
+            return { ...rest, isToday: true };
+          }
+          if (it.isToday && !it.completedAt) {
+            const { isToday: _, miniStep: _ms, ...rest } = it;
+            return { ...rest, missedAt: now };
+          }
+          return it;
+        })
+      );
+      showToast("日付が変わったので明日やる事を今日に繰り越したよ");
+    }
+    localStorage.setItem(STORAGE_LAST_SEEN, todayKey);
+  }, [hydrated]);
+
+  function addItem(asTomorrow: boolean) {
     const t = title.trim();
     if (!t) return;
     setItems((prev) => [
@@ -51,7 +83,7 @@ export default function Home() {
         title: t,
         createdAt: Date.now(),
         touches: [],
-        ...(asToday ? { isToday: true } : {}),
+        ...(asTomorrow ? { isTomorrow: true } : {}),
       },
       ...prev,
     ]);
@@ -93,7 +125,35 @@ export default function Home() {
 
   function toggleToday(id: string) {
     setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, isToday: !it.isToday } : it))
+      prev.map((it) => (it.id === id ? { ...it, isToday: !it.isToday, isTomorrow: false } : it))
+    );
+  }
+
+  function toggleTomorrow(id: string) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id ? { ...it, isTomorrow: !it.isTomorrow, isToday: false } : it
+      )
+    );
+  }
+
+  function promoteToToday(id: string) {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const { isTomorrow: _t, missedAt: _m, ...rest } = it;
+        return { ...rest, isToday: true };
+      })
+    );
+  }
+
+  function restoreMissed(id: string) {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const { missedAt: _m, ...rest } = it;
+        return rest;
+      })
     );
   }
 
@@ -151,7 +211,14 @@ export default function Home() {
   const childrenByParent = useMemo(() => {
     const map = new Map<string, Item[]>();
     items.forEach((it) => {
-      if (it.parentId && !it.letGoAt && !it.isToday && !it.completedAt) {
+      if (
+        it.parentId &&
+        !it.letGoAt &&
+        !it.isToday &&
+        !it.isTomorrow &&
+        !it.completedAt &&
+        !it.missedAt
+      ) {
         const arr = map.get(it.parentId) ?? [];
         arr.push(it);
         map.set(it.parentId, arr);
@@ -161,19 +228,26 @@ export default function Home() {
   }, [items]);
 
   const todayItems = useMemo(
-    () => items.filter((it) => it.isToday && !it.letGoAt && !it.completedAt),
+    () => items.filter((it) => it.isToday && !it.letGoAt && !it.completedAt && !it.missedAt),
+    [items]
+  );
+
+  const tomorrowItems = useMemo(
+    () => items.filter((it) => it.isTomorrow && !it.letGoAt && !it.completedAt && !it.missedAt),
     [items]
   );
 
   const poolRoots = useMemo(() => {
     const byId = new Map(items.map((it) => [it.id, it]));
+    const isOut = (it: Item) =>
+      it.isToday || it.isTomorrow || it.letGoAt || it.completedAt || it.missedAt;
     return items
       .filter((it) => {
-        if (it.isToday || it.letGoAt || it.completedAt) return false;
+        if (isOut(it)) return false;
         if (!it.parentId) return true;
         const parent = byId.get(it.parentId);
         if (!parent) return true;
-        if (parent.isToday || parent.letGoAt || parent.completedAt) return true;
+        if (isOut(parent)) return true;
         return false;
       })
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -184,6 +258,14 @@ export default function Home() {
       items
         .filter((it) => it.completedAt && !it.letGoAt)
         .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)),
+    [items]
+  );
+
+  const missedItems = useMemo(
+    () =>
+      items
+        .filter((it) => it.missedAt && !it.letGoAt && !it.completedAt)
+        .sort((a, b) => (b.missedAt ?? 0) - (a.missedAt ?? 0)),
     [items]
   );
 
@@ -222,7 +304,7 @@ export default function Home() {
             細かく
           </button>
           <button
-            onClick={() => toggleToday(it.id)}
+            onClick={() => toggleTomorrow(it.id)}
             className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
           >
             明日やる
@@ -271,7 +353,7 @@ export default function Home() {
       <div className="mx-auto max-w-2xl space-y-6">
         <header className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">
-            TaskLog <span className="text-emerald-400">v4.1</span>
+            TaskLog <span className="text-emerald-400">v4.2</span>
           </h1>
           <p className="text-sm text-neutral-400">
             前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。
@@ -343,7 +425,7 @@ export default function Home() {
                     </button>
                     <button
                       onClick={() => toggleToday(it.id)}
-                      className="rounded-md border border-neutral-700 px-3 py-2 text-xs text-neutral-400 hover:text-neutral-200"
+                      className="flex-1 rounded-md border border-neutral-700 px-3 py-2 text-xs text-neutral-400 hover:text-neutral-200"
                     >
                       外す
                     </button>
@@ -353,6 +435,44 @@ export default function Home() {
             </ul>
           )}
         </section>
+
+        {tomorrowItems.length > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-sky-300">
+              明日やる事（{tomorrowItems.length}）
+            </h2>
+            <ul className="space-y-2">
+              {tomorrowItems.map((it) => (
+                <li
+                  key={it.id}
+                  className="flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2"
+                >
+                  <span className="flex-1 min-w-0 break-words text-sm">{it.title}</span>
+                  <button
+                    onClick={() => promoteToToday(it.id)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+                  >
+                    今日やる
+                  </button>
+                  <button
+                    onClick={() => toggleTomorrow(it.id)}
+                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                  >
+                    外す
+                  </button>
+                  <button
+                    onClick={() => deleteItem(it.id)}
+                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                    aria-label="削除"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-neutral-600">日付が変わると自動で「今日やる事」に移ります</p>
+          </section>
+        )}
 
         <section className="space-y-2">
           <h2 className="text-sm font-semibold text-neutral-300">
@@ -368,6 +488,46 @@ export default function Home() {
             </ul>
           )}
         </section>
+
+        {missedItems.length > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-amber-300">
+              未達成（{missedItems.length}）
+            </h2>
+            <ul className="space-y-1.5">
+              {missedItems.map((it) => (
+                <li
+                  key={it.id}
+                  className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+                >
+                  <span className="text-amber-400 shrink-0">!</span>
+                  <span className="flex-1 min-w-0 break-words text-sm text-neutral-300">
+                    {it.title}
+                  </span>
+                  <button
+                    onClick={() => promoteToToday(it.id)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+                  >
+                    今日やる
+                  </button>
+                  <button
+                    onClick={() => restoreMissed(it.id)}
+                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                  >
+                    戻す
+                  </button>
+                  <button
+                    onClick={() => deleteItem(it.id)}
+                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                    aria-label="削除"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {doneItems.length > 0 && (
           <section className="space-y-2">
@@ -404,7 +564,7 @@ export default function Home() {
         )}
 
         <footer className="pt-4 text-center text-xs text-neutral-600">
-          TaskLog v4.1 — 最初のワンステップで、何もしない日を作らない
+          TaskLog v4.2 — 最初のワンステップで、何もしない日を作らない
         </footer>
       </div>
       {toast && (
