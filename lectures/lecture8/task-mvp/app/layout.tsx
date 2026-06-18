@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TaskLog v3 — 気になってる事を置く場所",
-  description: "気になってる事を気軽に置いて、触れたら積み上がる。手放しても咎められない。AIが最初の1分の一歩を提案。",
+  title: "TaskLog v4 — 最初のワンステップで、何もしない日を作らない",
+  description: "前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。抽象タスクは「細かくする」で数えられる単位に分解。",
   icons: {
     apple: "/apple-touch-icon.png",
   },
