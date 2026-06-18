@@ -13,6 +13,7 @@ type Item = {
   miniStep?: string;
   isToday?: boolean;
   parentId?: string;
+  completedAt?: number;
 };
 
 const STORAGE_ITEMS = "tasklog:items:v2";
@@ -126,10 +127,20 @@ export default function Home() {
       prev.map((it) => {
         if (it.id !== id) return it;
         const { miniStep: _ms, isToday: _t, ...rest } = it;
-        return { ...rest, touches: [...it.touches, now] };
+        return { ...rest, touches: [...it.touches, now], completedAt: now };
       })
     );
-    showToast("やった 🌱 一歩進んだ");
+    showToast("やった 🌱 やったことに貯まった");
+  }
+
+  function restoreDone(id: string) {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const { completedAt: _c, ...rest } = it;
+        return rest;
+      })
+    );
   }
 
   function showToast(msg: string) {
@@ -140,7 +151,7 @@ export default function Home() {
   const childrenByParent = useMemo(() => {
     const map = new Map<string, Item[]>();
     items.forEach((it) => {
-      if (it.parentId && !it.letGoAt && !it.isToday) {
+      if (it.parentId && !it.letGoAt && !it.isToday && !it.completedAt) {
         const arr = map.get(it.parentId) ?? [];
         arr.push(it);
         map.set(it.parentId, arr);
@@ -150,15 +161,29 @@ export default function Home() {
   }, [items]);
 
   const todayItems = useMemo(
-    () => items.filter((it) => it.isToday && !it.letGoAt),
+    () => items.filter((it) => it.isToday && !it.letGoAt && !it.completedAt),
     [items]
   );
 
-  const poolRoots = useMemo(
+  const poolRoots = useMemo(() => {
+    const byId = new Map(items.map((it) => [it.id, it]));
+    return items
+      .filter((it) => {
+        if (it.isToday || it.letGoAt || it.completedAt) return false;
+        if (!it.parentId) return true;
+        const parent = byId.get(it.parentId);
+        if (!parent) return true;
+        if (parent.isToday || parent.letGoAt || parent.completedAt) return true;
+        return false;
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [items]);
+
+  const doneItems = useMemo(
     () =>
       items
-        .filter((it) => !it.parentId && !it.isToday && !it.letGoAt)
-        .sort((a, b) => b.createdAt - a.createdAt),
+        .filter((it) => it.completedAt && !it.letGoAt)
+        .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)),
     [items]
   );
 
@@ -172,11 +197,11 @@ export default function Home() {
         key={it.id}
         className="rounded-md border border-neutral-800 bg-neutral-900"
       >
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex items-start gap-2 px-3 py-2">
           {hasKids ? (
             <button
               onClick={() => toggleCollapse(it.id)}
-              className="text-neutral-500 hover:text-neutral-200 text-xs px-1 shrink-0 w-4 text-center"
+              className="text-neutral-500 hover:text-neutral-200 text-xs px-1 shrink-0 w-4 text-center mt-0.5"
               aria-label={isCollapsed ? "展開" : "畳む"}
             >
               {isCollapsed ? "▶" : "▼"}
@@ -184,7 +209,7 @@ export default function Home() {
           ) : (
             <span className="w-4 shrink-0" />
           )}
-          <div className="flex-1 min-w-0 truncate text-sm">
+          <div className="flex-1 min-w-0 break-words text-sm">
             {it.title}
             {hasKids && isCollapsed && (
               <span className="ml-2 text-xs text-neutral-500">（{kids.length}）</span>
@@ -192,28 +217,26 @@ export default function Home() {
           </div>
           <button
             onClick={() => toggleExpand(it.id)}
-            className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
+            className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
           >
-            細かくする
+            細かく
           </button>
-          {!hasKids && (
-            <button
-              onClick={() => toggleToday(it.id)}
-              className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
-            >
-              明日やる
-            </button>
-          )}
+          <button
+            onClick={() => toggleToday(it.id)}
+            className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+          >
+            明日やる
+          </button>
           <button
             onClick={() => deleteItem(it.id)}
-            className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+            className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0 mt-0.5"
             aria-label="削除"
           >
             ✕
           </button>
         </div>
         {hasKids && !isCollapsed && (
-          <ul className="border-t border-neutral-800 pl-4 pr-2 py-2 space-y-1.5">
+          <ul className="border-l-2 border-emerald-500/30 ml-4 pl-2 pr-1 py-1 my-1 space-y-1">
             {kids.map((c) => renderPoolNode(c, depth + 1))}
           </ul>
         )}
@@ -248,7 +271,7 @@ export default function Home() {
       <div className="mx-auto max-w-2xl space-y-6">
         <header className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">
-            TaskLog <span className="text-emerald-400">v4</span>
+            TaskLog <span className="text-emerald-400">v4.1</span>
           </h1>
           <p className="text-sm text-neutral-400">
             前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。
@@ -346,8 +369,42 @@ export default function Home() {
           )}
         </section>
 
+        {doneItems.length > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-neutral-300">
+              やったこと（{doneItems.length}）
+            </h2>
+            <ul className="space-y-1.5">
+              {doneItems.map((it) => (
+                <li
+                  key={it.id}
+                  className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2"
+                >
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span className="flex-1 min-w-0 break-words text-sm text-neutral-400 line-through">
+                    {it.title}
+                  </span>
+                  <button
+                    onClick={() => restoreDone(it.id)}
+                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                  >
+                    戻す
+                  </button>
+                  <button
+                    onClick={() => deleteItem(it.id)}
+                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                    aria-label="削除"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <footer className="pt-4 text-center text-xs text-neutral-600">
-          TaskLog v4 — 最初のワンステップで、何もしない日を作らない
+          TaskLog v4.1 — 最初のワンステップで、何もしない日を作らない
         </footer>
       </div>
       {toast && (

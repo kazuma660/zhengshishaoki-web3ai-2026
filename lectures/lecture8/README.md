@@ -1,7 +1,9 @@
-# 第8回 プロダクト v4 — TaskLog（最初のワンステップで、何もしない日を作らない）
+# 第8回 プロダクト v4 → v4.1 — TaskLog（最初のワンステップで、何もしない日を作らない）
 
-🚀 **動くプロダクト v4: https://task-mvp-v31.vercel.app**
+🚀 **動くプロダクト v4.1: https://task-mvp-v31.vercel.app**
 🕰️ 前回まで（v3）: https://task-mvp-chi.vercel.app
+
+> v4 → v4.1: ヒアリングで出たフィードバックを反映（やったこと履歴／親も明日やる／階層深い文字見えないバグ修正／階段デザイン）。詳細は `task-mvp/README.md` 参照。
 
 提出パターン: **A-1 プロダクト系**（Vercelデプロイ + GitHub）
 
