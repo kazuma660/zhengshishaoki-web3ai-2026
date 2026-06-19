@@ -23,6 +23,9 @@ type AddTarget = "pool" | "today" | "tomorrow";
 
 const STORAGE_ITEMS = "tasklog:items:v2";
 const STORAGE_LAST_SEEN = "tasklog:lastSeen";
+const ARCHIVE_AFTER_DAYS = 7;
+const DELETE_AFTER_DAYS = 365;
+const DAY_MS = 86_400_000;
 
 function dateKey(ts: number): string {
   const d = new Date(ts);
@@ -39,6 +42,8 @@ export default function Home() {
   const [childInputs, setChildInputs] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [showDoneArchive, setShowDoneArchive] = useState(false);
+  const [showMissedArchive, setShowMissedArchive] = useState(false);
 
   useEffect(() => {
     try {
@@ -54,6 +59,19 @@ export default function Home() {
   useEffect(() => {
     if (hydrated) localStorage.setItem(STORAGE_ITEMS, JSON.stringify(items));
   }, [items, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const deleteThreshold = Date.now() - DELETE_AFTER_DAYS * DAY_MS;
+    setItems((prev) => {
+      const next = prev.filter((it) => {
+        if (it.completedAt && it.completedAt < deleteThreshold) return false;
+        if (it.missedAt && it.missedAt < deleteThreshold) return false;
+        return true;
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -323,20 +341,58 @@ export default function Home() {
       .sort((a, b) => b.createdAt - a.createdAt);
   }, [items]);
 
+  const archiveThreshold = useMemo(() => Date.now() - ARCHIVE_AFTER_DAYS * DAY_MS, []);
+
   const doneItems = useMemo(
     () =>
       items
-        .filter((it) => it.completedAt && !it.letGoAt)
+        .filter(
+          (it) =>
+            it.completedAt &&
+            it.completedAt >= archiveThreshold &&
+            !it.letGoAt
+        )
         .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)),
-    [items]
+    [items, archiveThreshold]
+  );
+
+  const doneArchived = useMemo(
+    () =>
+      items
+        .filter(
+          (it) =>
+            it.completedAt && it.completedAt < archiveThreshold && !it.letGoAt
+        )
+        .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)),
+    [items, archiveThreshold]
   );
 
   const missedItems = useMemo(
     () =>
       items
-        .filter((it) => it.missedAt && !it.letGoAt && !it.completedAt)
+        .filter(
+          (it) =>
+            it.missedAt &&
+            it.missedAt >= archiveThreshold &&
+            !it.letGoAt &&
+            !it.completedAt
+        )
         .sort((a, b) => (b.missedAt ?? 0) - (a.missedAt ?? 0)),
-    [items]
+    [items, archiveThreshold]
+  );
+
+  const missedArchived = useMemo(
+    () =>
+      items
+        .filter(
+          (it) =>
+            it.missedAt &&
+            it.missedAt < archiveThreshold &&
+            !it.letGoAt &&
+            !it.completedAt
+        )
+        .sort((a, b) => (b.missedAt ?? 0) - (a.missedAt ?? 0)),
+    [items, archiveThreshold]
   );
 
   function renderEditableTitle(
@@ -654,73 +710,156 @@ export default function Home() {
           )}
         </section>
 
-        {missedItems.length > 0 && (
+        {(missedItems.length > 0 || missedArchived.length > 0) && (
           <section className="space-y-2">
-            <h2 className="text-sm font-semibold text-amber-300">
-              未達成（{missedItems.length}）
-            </h2>
-            <ul className="space-y-1.5">
-              {missedItems.map((it) => (
-                <li
-                  key={it.id}
-                  className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+            {missedItems.length > 0 && (
+              <>
+                <h2 className="text-sm font-semibold text-amber-300">
+                  未達成（{missedItems.length}）
+                </h2>
+                <ul className="space-y-1.5">
+                  {missedItems.map((it) => (
+                    <li
+                      key={it.id}
+                      className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+                    >
+                      <span className="text-amber-400 shrink-0">!</span>
+                      {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
+                      <button
+                        onClick={() => promoteToToday(it.id)}
+                        className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+                      >
+                        今日やる
+                      </button>
+                      <button
+                        onClick={() => restoreMissed(it.id)}
+                        className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                      >
+                        戻す
+                      </button>
+                      <button
+                        onClick={() => deleteItem(it.id)}
+                        className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                        aria-label="削除"
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {missedArchived.length > 0 && (
+              <div className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button
+                  onClick={() => setShowMissedArchive((v) => !v)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300"
                 >
-                  <span className="text-amber-400 shrink-0">!</span>
-                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
-                  <button
-                    onClick={() => promoteToToday(it.id)}
-                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
-                  >
-                    今日やる
-                  </button>
-                  <button
-                    onClick={() => restoreMissed(it.id)}
-                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
-                  >
-                    戻す
-                  </button>
-                  <button
-                    onClick={() => deleteItem(it.id)}
-                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
-                    aria-label="削除"
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
+                  <span>📦 未達成アーカイブ（{missedArchived.length}）— 7日以上前</span>
+                  <span>{showMissedArchive ? "閉じる" : "開く"}</span>
+                </button>
+                {showMissedArchive && (
+                  <ul className="space-y-1 px-3 pb-3 text-xs">
+                    {missedArchived.map((it) => (
+                      <li
+                        key={it.id}
+                        className="flex items-center gap-2 text-neutral-500"
+                      >
+                        <span className="shrink-0">!</span>
+                        {renderEditableTitle(it, "flex-1 min-w-0 break-words")}
+                        <button
+                          onClick={() => restoreMissed(it.id)}
+                          className="text-neutral-500 hover:text-neutral-200 shrink-0"
+                        >
+                          戻す
+                        </button>
+                        <button
+                          onClick={() => deleteItem(it.id)}
+                          className="text-neutral-600 hover:text-red-400 px-1 shrink-0"
+                          aria-label="削除"
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </section>
         )}
 
-        {doneItems.length > 0 && (
+        {(doneItems.length > 0 || doneArchived.length > 0) && (
           <section className="space-y-2">
-            <h2 className="text-sm font-semibold text-neutral-300">
-              やったこと（{doneItems.length}）
-            </h2>
-            <ul className="space-y-1.5">
-              {doneItems.map((it) => (
-                <li
-                  key={it.id}
-                  className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2"
+            {doneItems.length > 0 && (
+              <>
+                <h2 className="text-sm font-semibold text-neutral-300">
+                  やったこと（{doneItems.length}）
+                </h2>
+                <ul className="space-y-1.5">
+                  {doneItems.map((it) => (
+                    <li
+                      key={it.id}
+                      className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2"
+                    >
+                      <span className="text-emerald-400 shrink-0">✓</span>
+                      {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-400 line-through")}
+                      <button
+                        onClick={() => restoreDone(it.id)}
+                        className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                      >
+                        戻す
+                      </button>
+                      <button
+                        onClick={() => deleteItem(it.id)}
+                        className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                        aria-label="削除"
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {doneArchived.length > 0 && (
+              <div className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button
+                  onClick={() => setShowDoneArchive((v) => !v)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300"
                 >
-                  <span className="text-emerald-400 shrink-0">✓</span>
-                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-400 line-through")}
-                  <button
-                    onClick={() => restoreDone(it.id)}
-                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
-                  >
-                    戻す
-                  </button>
-                  <button
-                    onClick={() => deleteItem(it.id)}
-                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
-                    aria-label="削除"
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
+                  <span>📦 やったことアーカイブ（{doneArchived.length}）— 7日以上前</span>
+                  <span>{showDoneArchive ? "閉じる" : "開く"}</span>
+                </button>
+                {showDoneArchive && (
+                  <ul className="space-y-1 px-3 pb-3 text-xs">
+                    {doneArchived.map((it) => (
+                      <li
+                        key={it.id}
+                        className="flex items-center gap-2 text-neutral-500"
+                      >
+                        <span className="text-emerald-500/60 shrink-0">✓</span>
+                        {renderEditableTitle(it, "flex-1 min-w-0 break-words line-through")}
+                        <button
+                          onClick={() => restoreDone(it.id)}
+                          className="text-neutral-500 hover:text-neutral-200 shrink-0"
+                        >
+                          戻す
+                        </button>
+                        <button
+                          onClick={() => deleteItem(it.id)}
+                          className="text-neutral-600 hover:text-red-400 px-1 shrink-0"
+                          aria-label="削除"
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="px-3 pb-2 text-[10px] text-neutral-600">365日以上前のものは自動削除されます</p>
+              </div>
+            )}
           </section>
         )}
 
