@@ -37,6 +37,8 @@ export default function Home() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [childInputs, setChildInputs] = useState<Record<string, string>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
 
   useEffect(() => {
     try {
@@ -238,6 +240,28 @@ export default function Home() {
     );
   }
 
+  function startEdit(it: Item) {
+    setEditingId(it.id);
+    setEditDraft(it.title);
+  }
+
+  function saveEdit() {
+    if (!editingId) return;
+    const next = editDraft.trim();
+    if (next) {
+      setItems((prev) =>
+        prev.map((it) => (it.id === editingId ? { ...it, title: next } : it))
+      );
+    }
+    setEditingId(null);
+    setEditDraft("");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft("");
+  }
+
   function showToast(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
@@ -315,6 +339,39 @@ export default function Home() {
     [items]
   );
 
+  function renderEditableTitle(
+    it: Item,
+    baseClass: string,
+    suffix?: React.ReactNode
+  ) {
+    if (editingId === it.id) {
+      return (
+        <input
+          autoFocus
+          type="text"
+          value={editDraft}
+          onChange={(e) => setEditDraft(e.target.value)}
+          onBlur={saveEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveEdit();
+            if (e.key === "Escape") cancelEdit();
+          }}
+          className="flex-1 min-w-0 rounded border border-emerald-500/50 bg-neutral-950 px-2 py-0.5 text-sm outline-none"
+        />
+      );
+    }
+    return (
+      <span
+        onClick={() => startEdit(it)}
+        className={`${baseClass} cursor-text hover:text-emerald-300`}
+        title="クリックで編集"
+      >
+        {it.title}
+        {suffix}
+      </span>
+    );
+  }
+
   function renderPoolNode(it: Item, depth: number) {
     const kids = childrenByParent.get(it.id) ?? [];
     const isExpanded = expandedIds.has(it.id);
@@ -337,12 +394,13 @@ export default function Home() {
           ) : (
             <span className="w-4 shrink-0" />
           )}
-          <div className="flex-1 min-w-0 break-words text-sm">
-            {it.title}
-            {hasKids && isCollapsed && (
+          {renderEditableTitle(
+            it,
+            "flex-1 min-w-0 break-words text-sm",
+            hasKids && isCollapsed ? (
               <span className="ml-2 text-xs text-neutral-500">（{kids.length}）</span>
-            )}
-          </div>
+            ) : undefined
+          )}
           <button
             onClick={() => toggleExpand(it.id)}
             className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
@@ -464,7 +522,7 @@ export default function Home() {
                   className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2"
                 >
                   <div className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0 text-sm font-medium">{it.title}</div>
+                    {renderEditableTitle(it, "flex-1 min-w-0 text-sm font-medium")}
                     <button
                       onClick={() => deleteItem(it.id)}
                       className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
@@ -511,7 +569,7 @@ export default function Home() {
                   key={it.id}
                   className="flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2"
                 >
-                  <span className="flex-1 min-w-0 break-words text-sm">{it.title}</span>
+                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm")}
                   <button
                     onClick={() => promoteToToday(it.id)}
                     className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
@@ -549,7 +607,7 @@ export default function Home() {
                   key={it.id}
                   className="flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/5 px-3 py-2"
                 >
-                  <span className="flex-1 min-w-0 break-words text-sm">{it.title}</span>
+                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm")}
                   <button
                     onClick={() => promoteToToday(it.id)}
                     className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
@@ -608,9 +666,7 @@ export default function Home() {
                   className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
                 >
                   <span className="text-amber-400 shrink-0">!</span>
-                  <span className="flex-1 min-w-0 break-words text-sm text-neutral-300">
-                    {it.title}
-                  </span>
+                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
                   <button
                     onClick={() => promoteToToday(it.id)}
                     className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
@@ -648,9 +704,7 @@ export default function Home() {
                   className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2"
                 >
                   <span className="text-emerald-400 shrink-0">✓</span>
-                  <span className="flex-1 min-w-0 break-words text-sm text-neutral-400 line-through">
-                    {it.title}
-                  </span>
+                  {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-400 line-through")}
                   <button
                     onClick={() => restoreDone(it.id)}
                     className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
