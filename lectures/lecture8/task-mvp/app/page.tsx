@@ -13,10 +13,13 @@ type Item = {
   miniStep?: string;
   isToday?: boolean;
   isTomorrow?: boolean;
+  isWeek?: boolean;
   parentId?: string;
   completedAt?: number;
   missedAt?: number;
 };
+
+type AddTarget = "pool" | "today" | "tomorrow";
 
 const STORAGE_ITEMS = "tasklog:items:v2";
 const STORAGE_LAST_SEEN = "tasklog:lastSeen";
@@ -74,16 +77,22 @@ export default function Home() {
     localStorage.setItem(STORAGE_LAST_SEEN, todayKey);
   }, [hydrated]);
 
-  function addItem(asTomorrow: boolean) {
+  function addItem(target: AddTarget) {
     const t = title.trim();
     if (!t) return;
+    const flags: Partial<Item> =
+      target === "today"
+        ? { isToday: true }
+        : target === "tomorrow"
+          ? { isTomorrow: true }
+          : {};
     setItems((prev) => [
       {
         id: crypto.randomUUID(),
         title: t,
         createdAt: Date.now(),
         touches: [],
-        ...(asTomorrow ? { isTomorrow: true } : {}),
+        ...flags,
       },
       ...prev,
     ]);
@@ -125,14 +134,30 @@ export default function Home() {
 
   function toggleToday(id: string) {
     setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, isToday: !it.isToday, isTomorrow: false } : it))
+      prev.map((it) =>
+        it.id === id
+          ? { ...it, isToday: !it.isToday, isTomorrow: false, isWeek: false }
+          : it
+      )
     );
   }
 
   function toggleTomorrow(id: string) {
     setItems((prev) =>
       prev.map((it) =>
-        it.id === id ? { ...it, isTomorrow: !it.isTomorrow, isToday: false } : it
+        it.id === id
+          ? { ...it, isTomorrow: !it.isTomorrow, isToday: false, isWeek: false }
+          : it
+      )
+    );
+  }
+
+  function toggleWeek(id: string) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id
+          ? { ...it, isWeek: !it.isWeek, isToday: false, isTomorrow: false }
+          : it
       )
     );
   }
@@ -141,8 +166,18 @@ export default function Home() {
     setItems((prev) =>
       prev.map((it) => {
         if (it.id !== id) return it;
-        const { isTomorrow: _t, missedAt: _m, ...rest } = it;
+        const { isTomorrow: _t, isWeek: _w, missedAt: _m, ...rest } = it;
         return { ...rest, isToday: true };
+      })
+    );
+  }
+
+  function promoteToTomorrow(id: string) {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const { isToday: _t, isWeek: _w, missedAt: _m, ...rest } = it;
+        return { ...rest, isTomorrow: true };
       })
     );
   }
@@ -216,6 +251,7 @@ export default function Home() {
         !it.letGoAt &&
         !it.isToday &&
         !it.isTomorrow &&
+        !it.isWeek &&
         !it.completedAt &&
         !it.missedAt
       ) {
@@ -237,10 +273,20 @@ export default function Home() {
     [items]
   );
 
+  const weekItems = useMemo(
+    () => items.filter((it) => it.isWeek && !it.letGoAt && !it.completedAt && !it.missedAt),
+    [items]
+  );
+
   const poolRoots = useMemo(() => {
     const byId = new Map(items.map((it) => [it.id, it]));
     const isOut = (it: Item) =>
-      it.isToday || it.isTomorrow || it.letGoAt || it.completedAt || it.missedAt;
+      it.isToday ||
+      it.isTomorrow ||
+      it.isWeek ||
+      it.letGoAt ||
+      it.completedAt ||
+      it.missedAt;
     return items
       .filter((it) => {
         if (isOut(it)) return false;
@@ -304,10 +350,22 @@ export default function Home() {
             細かく
           </button>
           <button
-            onClick={() => toggleTomorrow(it.id)}
-            className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+            onClick={() => toggleToday(it.id)}
+            className="rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 shrink-0"
           >
-            明日やる
+            今日
+          </button>
+          <button
+            onClick={() => toggleTomorrow(it.id)}
+            className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
+          >
+            明日
+          </button>
+          <button
+            onClick={() => toggleWeek(it.id)}
+            className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-xs font-semibold text-violet-300 hover:bg-violet-500/20 shrink-0"
+          >
+            今週
           </button>
           <button
             onClick={() => deleteItem(it.id)}
@@ -353,7 +411,7 @@ export default function Home() {
       <div className="mx-auto max-w-2xl space-y-6">
         <header className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">
-            TaskLog <span className="text-emerald-400">v4.2</span>
+            TaskLog <span className="text-emerald-400">v4.3</span>
           </h1>
           <p className="text-sm text-neutral-400">
             前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。
@@ -370,14 +428,20 @@ export default function Home() {
           />
           <div className="flex gap-2">
             <button
-              onClick={() => addItem(false)}
-              className="flex-1 rounded-md bg-neutral-700 px-4 py-2 text-sm font-semibold text-neutral-100 hover:bg-neutral-600"
+              onClick={() => addItem("pool")}
+              className="flex-1 rounded-md bg-neutral-700 px-3 py-2 text-sm font-semibold text-neutral-100 hover:bg-neutral-600"
             >
               置く
             </button>
             <button
-              onClick={() => addItem(true)}
-              className="flex-1 rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-emerald-400"
+              onClick={() => addItem("today")}
+              className="flex-1 rounded-md bg-emerald-500 px-3 py-2 text-sm font-semibold text-neutral-950 hover:bg-emerald-400"
+            >
+              今日やる
+            </button>
+            <button
+              onClick={() => addItem("tomorrow")}
+              className="flex-1 rounded-md bg-sky-500 px-3 py-2 text-sm font-semibold text-neutral-950 hover:bg-sky-400"
             >
               明日やる
             </button>
@@ -474,6 +538,49 @@ export default function Home() {
           </section>
         )}
 
+        {weekItems.length > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-violet-300">
+              今週やること（{weekItems.length}）
+            </h2>
+            <ul className="space-y-2">
+              {weekItems.map((it) => (
+                <li
+                  key={it.id}
+                  className="flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/5 px-3 py-2"
+                >
+                  <span className="flex-1 min-w-0 break-words text-sm">{it.title}</span>
+                  <button
+                    onClick={() => promoteToToday(it.id)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
+                  >
+                    今日
+                  </button>
+                  <button
+                    onClick={() => promoteToTomorrow(it.id)}
+                    className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
+                  >
+                    明日
+                  </button>
+                  <button
+                    onClick={() => toggleWeek(it.id)}
+                    className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
+                  >
+                    外す
+                  </button>
+                  <button
+                    onClick={() => deleteItem(it.id)}
+                    className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                    aria-label="削除"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section className="space-y-2">
           <h2 className="text-sm font-semibold text-neutral-300">
             気になってる事（{poolRoots.length}）
@@ -564,7 +671,7 @@ export default function Home() {
         )}
 
         <footer className="pt-4 text-center text-xs text-neutral-600">
-          TaskLog v4.2 — 最初のワンステップで、何もしない日を作らない
+          TaskLog v4.3 — 最初のワンステップで、何もしない日を作らない
         </footer>
       </div>
       {toast && (
