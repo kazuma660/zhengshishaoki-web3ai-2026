@@ -1,6 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  DndContext,
+  DragEndEvent,
+  DragStartEvent,
+  PointerSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 
 type Item = {
   id: string;
@@ -27,6 +38,80 @@ const ARCHIVE_AFTER_DAYS = 7;
 const DELETE_AFTER_DAYS = 365;
 const DAY_MS = 86_400_000;
 
+function DraggableDroppable({
+  id,
+  disabled,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  children: (args: {
+    attributes: React.HTMLAttributes<HTMLElement>;
+    listeners: Record<string, (event: React.SyntheticEvent) => void> | undefined;
+    setDragRef: (node: HTMLElement | null) => void;
+    setDropRef: (node: HTMLElement | null) => void;
+    style: React.CSSProperties;
+    isOver: boolean;
+    isDragging: boolean;
+  }) => React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDragRef,
+    transform,
+    isDragging,
+  } = useDraggable({ id });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id, disabled });
+  const style: React.CSSProperties = {
+    opacity: isDragging ? 0.4 : 1,
+    transform: transform
+      ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
+      : undefined,
+  };
+  return children({
+    attributes: attributes as React.HTMLAttributes<HTMLElement>,
+    listeners: listeners as Record<string, (event: React.SyntheticEvent) => void> | undefined,
+    setDragRef,
+    setDropRef,
+    style,
+    isOver,
+    isDragging,
+  });
+}
+
+function RootDropZone({ visible }: { visible: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({ id: "pool-root" });
+  if (!visible) return null;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`mb-2 rounded-md border-2 border-dashed p-2 text-center text-xs ${
+        isOver
+          ? "border-emerald-400 bg-emerald-500/10 text-emerald-300"
+          : "border-neutral-700 text-neutral-500"
+      }`}
+    >
+      ⬆ ここに離すと一番上の階層に
+    </div>
+  );
+}
+
+function collectDescendants(items: Item[], rootId: string): Set<string> {
+  const result = new Set<string>([rootId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    items.forEach((it) => {
+      if (it.parentId && result.has(it.parentId) && !result.has(it.id)) {
+        result.add(it.id);
+        grew = true;
+      }
+    });
+  }
+  return result;
+}
+
 function dateKey(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -44,6 +129,42 @@ export default function Home() {
   const [editDraft, setEditDraft] = useState("");
   const [showDoneArchive, setShowDoneArchive] = useState(false);
   const [showMissedArchive, setShowMissedArchive] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } })
+  );
+
+  const draggedDescendants = useMemo(
+    () => (draggedId ? collectDescendants(items, draggedId) : new Set<string>()),
+    [draggedId, items]
+  );
+
+  function handleDragStart(e: DragStartEvent) {
+    setDraggedId(String(e.active.id));
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    setDraggedId(null);
+    const { active, over } = e;
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (activeId === overId) return;
+    if (overId === "pool-root") {
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === activeId ? { ...it, parentId: undefined } : it
+        )
+      );
+      return;
+    }
+    if (collectDescendants(items, activeId).has(overId)) return;
+    setItems((prev) =>
+      prev.map((it) => (it.id === activeId ? { ...it, parentId: overId } : it))
+    );
+  }
 
   useEffect(() => {
     try {
@@ -433,12 +554,27 @@ export default function Home() {
     const isExpanded = expandedIds.has(it.id);
     const hasKids = kids.length > 0;
     const isCollapsed = collapsedIds.has(it.id);
+    const dropDisabled = draggedDescendants.has(it.id);
     return (
+      <DraggableDroppable key={it.id} id={it.id} disabled={dropDisabled}>
+        {({ attributes, listeners, setDragRef, setDropRef, style, isOver }) => (
       <li
-        key={it.id}
-        className="rounded-md border border-neutral-800 bg-neutral-900"
+        ref={setDropRef}
+        style={style}
+        className={`rounded-md border bg-neutral-900 ${
+          isOver ? "border-emerald-400 ring-2 ring-emerald-400/30" : "border-neutral-800"
+        }`}
       >
         <div className="flex items-start gap-2 px-3 py-2">
+          <button
+            ref={setDragRef as React.Ref<HTMLButtonElement>}
+            {...attributes}
+            {...listeners}
+            className="text-neutral-500 hover:text-neutral-200 text-xs px-1 shrink-0 cursor-grab active:cursor-grabbing touch-none mt-0.5"
+            aria-label="ドラッグして移動"
+          >
+            ⋮⋮
+          </button>
           {hasKids ? (
             <button
               onClick={() => toggleCollapse(it.id)}
@@ -517,6 +653,8 @@ export default function Home() {
           </div>
         )}
       </li>
+        )}
+      </DraggableDroppable>
     );
   }
 
@@ -600,6 +738,12 @@ export default function Home() {
                       className="flex-1 rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-emerald-400"
                     >
                       やった
+                    </button>
+                    <button
+                      onClick={() => promoteToTomorrow(it.id)}
+                      className="flex-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/20"
+                    >
+                      明日へ
                     </button>
                     <button
                       onClick={() => toggleToday(it.id)}
@@ -699,15 +843,26 @@ export default function Home() {
           <h2 className="text-sm font-semibold text-neutral-300">
             気になってる事（{poolRoots.length}）
           </h2>
-          {poolRoots.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-              まだ無い。上から気軽に置こう。
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {poolRoots.map((it) => renderPoolNode(it, 0))}
-            </ul>
-          )}
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setDraggedId(null)}
+          >
+            <RootDropZone visible={!!draggedId} />
+            {poolRoots.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
+                まだ無い。上から気軽に置こう。
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {poolRoots.map((it) => renderPoolNode(it, 0))}
+              </ul>
+            )}
+          </DndContext>
+          <p className="text-[10px] text-neutral-600">
+            ⋮⋮ をドラッグして並び替え／別の項目の上にドロップで子タスクに、上のゾーンにドロップで一番上の階層に戻せる
+          </p>
         </section>
 
         {(missedItems.length > 0 || missedArchived.length > 0) && (
