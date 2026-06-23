@@ -194,7 +194,8 @@ export default function Home() {
     today: boolean;
     pool: boolean;
     tomorrow: boolean;
-  }>({ today: false, pool: false, tomorrow: false });
+    missed: boolean;
+  }>({ today: false, pool: false, tomorrow: false, missed: false });
   const lastRemoteJsonRef = useRef<string>("");
 
   const sensors = useSensors(
@@ -222,6 +223,7 @@ export default function Home() {
             today: !!parsed.today,
             pool: !!parsed.pool,
             tomorrow: !!parsed.tomorrow,
+            missed: !!parsed.missed,
           });
         }
       }
@@ -234,7 +236,7 @@ export default function Home() {
     } catch {}
   }, [sectionsCollapsed]);
 
-  function toggleSection(key: "today" | "pool" | "tomorrow") {
+  function toggleSection(key: "today" | "pool" | "tomorrow" | "missed") {
     setSectionsCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
@@ -854,7 +856,7 @@ export default function Home() {
 
   return (
     <main className="flex-1 bg-neutral-950 text-neutral-100 px-4 py-8 sm:px-8">
-      <div className="mx-auto max-w-2xl space-y-6 lg:max-w-6xl">
+      <div className="mx-auto max-w-2xl space-y-6 lg:max-w-6xl xl:max-w-[1536px]">
         <header className="space-y-2 lg:mx-auto lg:max-w-2xl">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-3xl font-bold tracking-tight">
@@ -874,9 +876,6 @@ export default function Home() {
               </button>
             </div>
           </div>
-          <p className="text-sm text-neutral-400">
-            前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。
-          </p>
         </header>
 
         <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2 lg:mx-auto lg:max-w-2xl">
@@ -912,8 +911,8 @@ export default function Home() {
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
-        <section className="space-y-2 lg:order-1">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-4 xl:gap-6">
+        <section className="space-y-2 xl:order-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-emerald-300">
               今日やる事（{todayItems.length}）
@@ -984,7 +983,7 @@ export default function Home() {
           )}
         </section>
 
-        <section className="space-y-2 lg:order-3">
+        <section className="space-y-2 xl:order-4">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-sky-300">
               明日やる事（{tomorrowItems.length}）
@@ -1056,7 +1055,7 @@ export default function Home() {
           )}
         </section>
 
-        <section className="space-y-2 lg:order-2">
+        <section className="space-y-2 xl:order-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-neutral-300">
               気になってる事（{poolRoots.length}）
@@ -1094,20 +1093,34 @@ export default function Home() {
           </>
           )}
         </section>
-        </div>
 
-        {(missedItems.length > 0 || missedArchived.length > 0) && (
-          <section className="space-y-2 lg:mx-auto lg:max-w-2xl">
-            {missedItems.length > 0 && (
-              <>
-                <h2 className="text-sm font-semibold text-amber-300">
-                  未達成（{missedItems.length}）
-                </h2>
+        <section className="space-y-2 xl:order-2">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-amber-300">
+              未達成（{missedItems.length}）
+            </h2>
+            <button
+              onClick={() => toggleSection("missed")}
+              className="text-neutral-400 hover:text-neutral-100 text-xs px-1"
+              aria-label={sectionsCollapsed.missed ? "展開" : "畳む"}
+            >
+              {sectionsCollapsed.missed ? "▶" : "▼"}
+            </button>
+          </div>
+          {!sectionsCollapsed.missed && (
+          <>
+          {missedItems.length === 0 && missedArchived.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
+              まだ無い。やれなかった日は淡々と記録、責めない。
+            </div>
+          ) : (
+            <>
+              {missedItems.length > 0 && (
                 <ul className="space-y-1.5">
                   {missedItems.map((it) => (
                     <li
                       key={it.id}
-                      className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+                      className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
                     >
                       <span className="text-amber-400 shrink-0">!</span>
                       {renderTitleWithParent(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
@@ -1133,47 +1146,50 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-              </>
-            )}
-            {missedArchived.length > 0 && (
-              <div className="rounded-md border border-neutral-800 bg-neutral-900/30">
-                <button
-                  onClick={() => setShowMissedArchive((v) => !v)}
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300"
-                >
-                  <span>📦 未達成アーカイブ（{missedArchived.length}）— 7日以上前</span>
-                  <span>{showMissedArchive ? "閉じる" : "開く"}</span>
-                </button>
-                {showMissedArchive && (
-                  <ul className="space-y-1 px-3 pb-3 text-xs">
-                    {missedArchived.map((it) => (
-                      <li
-                        key={it.id}
-                        className="flex items-center gap-2 text-neutral-500"
-                      >
-                        <span className="shrink-0">!</span>
-                        {renderTitleWithParent(it, "flex-1 min-w-0 break-words")}
-                        <button
-                          onClick={() => restoreMissed(it.id)}
-                          className="text-neutral-300 hover:text-neutral-100 shrink-0"
+              )}
+              {missedArchived.length > 0 && (
+                <div className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                  <button
+                    onClick={() => setShowMissedArchive((v) => !v)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300"
+                  >
+                    <span>📦 アーカイブ（{missedArchived.length}）</span>
+                    <span>{showMissedArchive ? "閉じる" : "開く"}</span>
+                  </button>
+                  {showMissedArchive && (
+                    <ul className="space-y-1 px-3 pb-3 text-xs">
+                      {missedArchived.map((it) => (
+                        <li
+                          key={it.id}
+                          className="flex items-center gap-2 text-neutral-500"
                         >
-                          戻す
-                        </button>
-                        <button
-                          onClick={() => deleteItem(it.id)}
-                          className="text-neutral-400 hover:text-red-400 px-1 shrink-0"
-                          aria-label="削除"
-                        >
-                          ✕
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </section>
-        )}
+                          <span className="shrink-0">!</span>
+                          {renderTitleWithParent(it, "flex-1 min-w-0 break-words")}
+                          <button
+                            onClick={() => restoreMissed(it.id)}
+                            className="text-neutral-300 hover:text-neutral-100 shrink-0"
+                          >
+                            戻す
+                          </button>
+                          <button
+                            onClick={() => deleteItem(it.id)}
+                            className="text-neutral-400 hover:text-red-400 px-1 shrink-0"
+                            aria-label="削除"
+                          >
+                            ✕
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          </>
+          )}
+        </section>
+        </div>
 
         {(doneItems.length > 0 || doneArchived.length > 0) && (
           <section className="space-y-2 lg:mx-auto lg:max-w-2xl">
@@ -1249,9 +1265,6 @@ export default function Home() {
           </section>
         )}
 
-        <footer className="pt-4 text-center text-xs text-neutral-600 lg:mx-auto lg:max-w-2xl">
-          TaskLog v5 — 最初のワンステップで、何もしない日を作らない
-        </footer>
       </div>
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-emerald-500/40 bg-neutral-900 px-4 py-2 text-sm text-emerald-300 shadow-lg z-50">
