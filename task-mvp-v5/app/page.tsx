@@ -665,7 +665,7 @@ export default function Home() {
       .trim();
     return (
       <div className="flex-1 min-w-0">
-        <div className="text-[10px] text-neutral-500 truncate">
+        <div className="text-xs text-neutral-400 truncate">
           {parentChain} /
         </div>
         {renderEditableTitle(it, `block w-full ${innerClass}`, suffix)}
