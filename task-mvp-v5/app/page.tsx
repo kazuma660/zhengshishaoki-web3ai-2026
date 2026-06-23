@@ -40,6 +40,7 @@ type Item = {
 type AddTarget = "pool" | "today" | "tomorrow";
 
 const STORAGE_ITEMS = "tasklog:items:v2";
+const STORAGE_UI = "tasklog:ui:v1";
 const ARCHIVE_AFTER_DAYS = 7;
 const DELETE_AFTER_DAYS = 365;
 const DAY_MS = 86_400_000;
@@ -189,6 +190,11 @@ export default function Home() {
   const [showDoneArchive, setShowDoneArchive] = useState(false);
   const [showMissedArchive, setShowMissedArchive] = useState(false);
   const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [sectionsCollapsed, setSectionsCollapsed] = useState<{
+    today: boolean;
+    pool: boolean;
+    tomorrow: boolean;
+  }>({ today: false, pool: false, tomorrow: false });
   const lastRemoteJsonRef = useRef<string>("");
 
   const sensors = useSensors(
@@ -205,6 +211,32 @@ export default function Home() {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_UI);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          setSectionsCollapsed({
+            today: !!parsed.today,
+            pool: !!parsed.pool,
+            tomorrow: !!parsed.tomorrow,
+          });
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_UI, JSON.stringify(sectionsCollapsed));
+    } catch {}
+  }, [sectionsCollapsed]);
+
+  function toggleSection(key: "today" | "pool" | "tomorrow") {
+    setSectionsCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   function handleDragStart(e: DragStartEvent) {
     setDraggedId(String(e.active.id));
@@ -822,8 +854,8 @@ export default function Home() {
 
   return (
     <main className="flex-1 bg-neutral-950 text-neutral-100 px-4 py-8 sm:px-8">
-      <div className="mx-auto max-w-2xl space-y-6">
-        <header className="space-y-2">
+      <div className="mx-auto max-w-2xl space-y-6 lg:max-w-6xl">
+        <header className="space-y-2 lg:mx-auto lg:max-w-2xl">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-3xl font-bold tracking-tight">
               TaskLog <span className="text-emerald-400">v5</span>
@@ -847,7 +879,7 @@ export default function Home() {
           </p>
         </header>
 
-        <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
+        <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2 lg:mx-auto lg:max-w-2xl">
           <input
             type="text"
             value={title}
@@ -880,10 +912,22 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-emerald-300">
-            今日やる事（{todayItems.length}）
-          </h2>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
+        <section className="space-y-2 lg:order-1">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-emerald-300">
+              今日やる事（{todayItems.length}）
+            </h2>
+            <button
+              onClick={() => toggleSection("today")}
+              className="text-neutral-400 hover:text-neutral-100 text-xs px-1"
+              aria-label={sectionsCollapsed.today ? "展開" : "畳む"}
+            >
+              {sectionsCollapsed.today ? "▶" : "▼"}
+            </button>
+          </div>
+          {!sectionsCollapsed.today && (
+          <>
           {todayItems.length === 0 ? (
             <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
               まだ無い。下から「明日やる」を押すか、上の入力で直接置こう。
@@ -936,13 +980,30 @@ export default function Home() {
               ))}
             </ul>
           )}
+          </>
+          )}
         </section>
 
-        {tomorrowItems.length > 0 && (
-          <section className="space-y-2">
+        <section className="space-y-2 lg:order-3">
+          <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-sky-300">
               明日やる事（{tomorrowItems.length}）
             </h2>
+            <button
+              onClick={() => toggleSection("tomorrow")}
+              className="text-neutral-400 hover:text-neutral-100 text-xs px-1"
+              aria-label={sectionsCollapsed.tomorrow ? "展開" : "畳む"}
+            >
+              {sectionsCollapsed.tomorrow ? "▶" : "▼"}
+            </button>
+          </div>
+          {!sectionsCollapsed.tomorrow && (
+          <>
+          {tomorrowItems.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
+              まだ無い。前夜に「明日やる」を置いておくと、朝の判断ゼロで動ける。
+            </div>
+          ) : (
             <ul className="space-y-2">
               {tomorrowItems.map((it) => (
                 <li
@@ -989,14 +1050,27 @@ export default function Home() {
                 </li>
               ))}
             </ul>
-            <p className="text-xs text-neutral-600">日付が変わると自動で「今日やる事」に移ります</p>
-          </section>
-        )}
+          )}
+          <p className="text-xs text-neutral-600">日付が変わると自動で「今日やる事」に移ります</p>
+          </>
+          )}
+        </section>
 
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-neutral-300">
-            気になってる事（{poolRoots.length}）
-          </h2>
+        <section className="space-y-2 lg:order-2">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-neutral-300">
+              気になってる事（{poolRoots.length}）
+            </h2>
+            <button
+              onClick={() => toggleSection("pool")}
+              className="text-neutral-400 hover:text-neutral-100 text-xs px-1"
+              aria-label={sectionsCollapsed.pool ? "展開" : "畳む"}
+            >
+              {sectionsCollapsed.pool ? "▶" : "▼"}
+            </button>
+          </div>
+          {!sectionsCollapsed.pool && (
+          <>
           <DndContext
             sensors={sensors}
             onDragStart={handleDragStart}
@@ -1017,10 +1091,13 @@ export default function Home() {
           <p className="text-[10px] text-neutral-600">
             ⋮⋮ をドラッグして並び替え／別の項目の上にドロップで子タスクに、上のゾーンにドロップで一番上の階層に戻せる
           </p>
+          </>
+          )}
         </section>
+        </div>
 
         {(missedItems.length > 0 || missedArchived.length > 0) && (
-          <section className="space-y-2">
+          <section className="space-y-2 lg:mx-auto lg:max-w-2xl">
             {missedItems.length > 0 && (
               <>
                 <h2 className="text-sm font-semibold text-amber-300">
@@ -1099,7 +1176,7 @@ export default function Home() {
         )}
 
         {(doneItems.length > 0 || doneArchived.length > 0) && (
-          <section className="space-y-2">
+          <section className="space-y-2 lg:mx-auto lg:max-w-2xl">
             {doneItems.length > 0 && (
               <>
                 <h2 className="text-sm font-semibold text-neutral-300">
@@ -1172,7 +1249,7 @@ export default function Home() {
           </section>
         )}
 
-        <footer className="pt-4 text-center text-xs text-neutral-600">
+        <footer className="pt-4 text-center text-xs text-neutral-600 lg:mx-auto lg:max-w-2xl">
           TaskLog v5 — 最初のワンステップで、何もしない日を作らない
         </footer>
       </div>
