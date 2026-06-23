@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -43,6 +43,56 @@ const STORAGE_ITEMS = "tasklog:items:v2";
 const ARCHIVE_AFTER_DAYS = 7;
 const DELETE_AFTER_DAYS = 365;
 const DAY_MS = 86_400_000;
+const MAX_DEPTH = 5;
+
+function getDepth(items: Item[], id: string): number {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  let depth = 1;
+  let cur = byId.get(id);
+  while (cur?.parentId) {
+    depth++;
+    cur = byId.get(cur.parentId);
+    if (depth > 100) break;
+  }
+  return depth;
+}
+
+function getParentChain(items: Item[], id: string): string | null {
+  const byId = new Map(items.map((x) => [x.id, x]));
+  const titles: string[] = [];
+  let cur = byId.get(id);
+  while (cur?.parentId) {
+    const parent = byId.get(cur.parentId);
+    if (!parent) break;
+    titles.unshift(parent.title);
+    cur = parent;
+    if (titles.length > MAX_DEPTH) break;
+  }
+  return titles.length ? titles.join(" / ") : null;
+}
+
+function getSubtreeHeight(items: Item[], rootId: string): number {
+  const childrenByParent = new Map<string, string[]>();
+  items.forEach((it) => {
+    if (it.parentId) {
+      const arr = childrenByParent.get(it.parentId) ?? [];
+      arr.push(it.id);
+      childrenByParent.set(it.parentId, arr);
+    }
+  });
+  let maxHeight = 0;
+  const stack: Array<{ id: string; height: number }> = [
+    { id: rootId, height: 0 },
+  ];
+  while (stack.length) {
+    const { id, height } = stack.pop()!;
+    if (height > maxHeight) maxHeight = height;
+    (childrenByParent.get(id) ?? []).forEach((cid) =>
+      stack.push({ id: cid, height: height + 1 })
+    );
+  }
+  return maxHeight;
+}
 
 function DraggableDroppable({
   id,
@@ -151,6 +201,11 @@ export default function Home() {
     [draggedId, items]
   );
 
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2000);
+  }, []);
+
   function handleDragStart(e: DragStartEvent) {
     setDraggedId(String(e.active.id));
   }
@@ -171,6 +226,12 @@ export default function Home() {
       return;
     }
     if (collectDescendants(items, activeId).has(overId)) return;
+    const newActiveDepth = getDepth(items, overId) + 1;
+    const subtreeHeight = getSubtreeHeight(items, activeId);
+    if (newActiveDepth + subtreeHeight > MAX_DEPTH) {
+      showToast(`階層は${MAX_DEPTH}層までだよ`);
+      return;
+    }
     setItems((prev) =>
       prev.map((it) => (it.id === activeId ? { ...it, parentId: overId } : it))
     );
@@ -301,6 +362,10 @@ export default function Home() {
   function addChild(parentId: string) {
     const t = (childInputs[parentId] ?? "").trim();
     if (!t) return;
+    if (getDepth(items, parentId) >= MAX_DEPTH) {
+      showToast(`階層は${MAX_DEPTH}層までだよ`);
+      return;
+    }
     setItems((prev) => [
       ...prev,
       {
@@ -449,11 +514,6 @@ export default function Home() {
     setEditDraft("");
   }
 
-  function showToast(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2000);
-  }
-
   const childrenByParent = useMemo(() => {
     const map = new Map<string, Item[]>();
     items.forEach((it) => {
@@ -574,7 +634,7 @@ export default function Home() {
             if (e.key === "Enter") saveEdit();
             if (e.key === "Escape") cancelEdit();
           }}
-          className="flex-1 min-w-0 rounded border border-emerald-500/50 bg-neutral-950 px-2 py-0.5 text-sm outline-none"
+          className={`${baseClass} rounded border border-emerald-500/50 bg-neutral-950 px-2 py-0.5 outline-none`}
         />
       );
     }
@@ -590,12 +650,36 @@ export default function Home() {
     );
   }
 
+  function renderTitleWithParent(
+    it: Item,
+    baseClass: string,
+    suffix?: React.ReactNode
+  ) {
+    const parentChain = getParentChain(items, it.id);
+    if (!parentChain) {
+      return renderEditableTitle(it, baseClass, suffix);
+    }
+    const innerClass = baseClass
+      .replace(/\bflex-1\b/g, "")
+      .replace(/\bmin-w-0\b/g, "")
+      .trim();
+    return (
+      <div className="flex-1 min-w-0">
+        <div className="text-[10px] text-neutral-500 truncate">
+          {parentChain} /
+        </div>
+        {renderEditableTitle(it, `block w-full ${innerClass}`, suffix)}
+      </div>
+    );
+  }
+
   function renderPoolNode(it: Item, depth: number) {
     const kids = childrenByParent.get(it.id) ?? [];
     const isExpanded = expandedIds.has(it.id);
     const hasKids = kids.length > 0;
     const isCollapsed = collapsedIds.has(it.id);
     const dropDisabled = draggedDescendants.has(it.id);
+    const atMaxDepth = getDepth(items, it.id) >= MAX_DEPTH;
     return (
       <DraggableDroppable key={it.id} id={it.id} disabled={dropDisabled}>
         {({ attributes, listeners, setDragRef, setDropRef, style, isOver }) => (
@@ -611,7 +695,7 @@ export default function Home() {
             ref={setDragRef as React.Ref<HTMLButtonElement>}
             {...attributes}
             {...listeners}
-            className="text-neutral-500 hover:text-neutral-200 text-xs px-1 shrink-0 cursor-grab active:cursor-grabbing touch-none mt-0.5"
+            className="text-neutral-300 hover:text-neutral-100 text-xs px-1 shrink-0 cursor-grab active:cursor-grabbing touch-none mt-0.5"
             aria-label="ドラッグして移動"
           >
             ⋮⋮
@@ -619,7 +703,7 @@ export default function Home() {
           {hasKids ? (
             <button
               onClick={() => toggleCollapse(it.id)}
-              className="text-neutral-500 hover:text-neutral-200 text-xs px-1 shrink-0 w-4 text-center mt-0.5"
+              className="text-neutral-300 hover:text-neutral-100 text-xs px-1 shrink-0 w-4 text-center mt-0.5"
               aria-label={isCollapsed ? "展開" : "畳む"}
             >
               {isCollapsed ? "▶" : "▼"}
@@ -634,12 +718,14 @@ export default function Home() {
               <span className="ml-2 text-xs text-neutral-500">（{kids.length}）</span>
             ) : undefined
           )}
-          <button
-            onClick={() => toggleExpand(it.id)}
-            className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
-          >
-            細かく
-          </button>
+          {!atMaxDepth && (
+            <button
+              onClick={() => toggleExpand(it.id)}
+              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
+            >
+              細かく
+            </button>
+          )}
           <button
             onClick={() => toggleToday(it.id)}
             className="rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 shrink-0"
@@ -654,14 +740,14 @@ export default function Home() {
           </button>
           <button
             onClick={() => deleteItem(it.id)}
-            className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0 mt-0.5"
+            className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0 mt-0.5"
             aria-label="削除"
           >
             ✕
           </button>
         </div>
         {hasKids && !isCollapsed && (
-          <ul className="border-l-2 border-emerald-500/30 ml-4 pl-2 pr-1 py-1 my-1 space-y-1">
+          <ul className="border-l-2 border-emerald-500/50 ml-4 pl-2 pr-1 py-1 my-1 space-y-1">
             {kids.map((c) => renderPoolNode(c, depth + 1))}
           </ul>
         )}
@@ -676,6 +762,9 @@ export default function Home() {
                   [it.id]: e.target.value,
                 }))
               }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") addChild(it.id);
+              }}
               placeholder="数えられる単位で（例：英単語20個）"
               className="flex-1 min-w-0 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs outline-none focus:border-sky-500"
             />
@@ -763,7 +852,10 @@ export default function Home() {
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="気になってる事は？"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addItem("pool");
+            }}
+            placeholder="気になってる事は？（Enter で「置く」）"
             className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-base sm:text-sm outline-none focus:border-emerald-500"
           />
           <div className="flex gap-2">
@@ -801,13 +893,13 @@ export default function Home() {
               {todayItems.map((it) => (
                 <li
                   key={it.id}
-                  className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2"
+                  className="rounded-md border border-emerald-500/50 bg-emerald-500/5 p-3 space-y-2"
                 >
                   <div className="flex items-center gap-2">
-                    {renderEditableTitle(it, "flex-1 min-w-0 text-sm font-medium")}
+                    {renderTitleWithParent(it, "flex-1 min-w-0 text-sm font-medium")}
                     <button
                       onClick={() => deleteItem(it.id)}
-                      className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                      className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                       aria-label="削除"
                     >
                       ✕
@@ -858,10 +950,10 @@ export default function Home() {
                   className="rounded-md border border-sky-500/30 bg-sky-500/5 p-3 space-y-2"
                 >
                   <div className="flex items-center gap-2">
-                    {renderEditableTitle(it, "flex-1 min-w-0 text-sm font-medium")}
+                    {renderTitleWithParent(it, "flex-1 min-w-0 text-sm font-medium")}
                     <button
                       onClick={() => deleteItem(it.id)}
-                      className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                      className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                       aria-label="削除"
                     >
                       ✕
@@ -941,7 +1033,7 @@ export default function Home() {
                       className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2"
                     >
                       <span className="text-amber-400 shrink-0">!</span>
-                      {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
+                      {renderTitleWithParent(it, "flex-1 min-w-0 break-words text-sm text-neutral-300")}
                       <button
                         onClick={() => promoteToToday(it.id)}
                         className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 shrink-0"
@@ -956,7 +1048,7 @@ export default function Home() {
                       </button>
                       <button
                         onClick={() => deleteItem(it.id)}
-                        className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                        className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                         aria-label="削除"
                       >
                         ✕
@@ -983,16 +1075,16 @@ export default function Home() {
                         className="flex items-center gap-2 text-neutral-500"
                       >
                         <span className="shrink-0">!</span>
-                        {renderEditableTitle(it, "flex-1 min-w-0 break-words")}
+                        {renderTitleWithParent(it, "flex-1 min-w-0 break-words")}
                         <button
                           onClick={() => restoreMissed(it.id)}
-                          className="text-neutral-500 hover:text-neutral-200 shrink-0"
+                          className="text-neutral-300 hover:text-neutral-100 shrink-0"
                         >
                           戻す
                         </button>
                         <button
                           onClick={() => deleteItem(it.id)}
-                          className="text-neutral-600 hover:text-red-400 px-1 shrink-0"
+                          className="text-neutral-400 hover:text-red-400 px-1 shrink-0"
                           aria-label="削除"
                         >
                           ✕
@@ -1020,7 +1112,7 @@ export default function Home() {
                       className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2"
                     >
                       <span className="text-emerald-400 shrink-0">✓</span>
-                      {renderEditableTitle(it, "flex-1 min-w-0 break-words text-sm text-neutral-400 line-through")}
+                      {renderTitleWithParent(it, "flex-1 min-w-0 break-words text-sm text-neutral-400 line-through")}
                       <button
                         onClick={() => restoreDone(it.id)}
                         className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
@@ -1029,7 +1121,7 @@ export default function Home() {
                       </button>
                       <button
                         onClick={() => deleteItem(it.id)}
-                        className="text-neutral-600 hover:text-red-400 text-xs px-1 shrink-0"
+                        className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                         aria-label="削除"
                       >
                         ✕
@@ -1056,16 +1148,16 @@ export default function Home() {
                         className="flex items-center gap-2 text-neutral-500"
                       >
                         <span className="text-emerald-500/60 shrink-0">✓</span>
-                        {renderEditableTitle(it, "flex-1 min-w-0 break-words line-through")}
+                        {renderTitleWithParent(it, "flex-1 min-w-0 break-words line-through")}
                         <button
                           onClick={() => restoreDone(it.id)}
-                          className="text-neutral-500 hover:text-neutral-200 shrink-0"
+                          className="text-neutral-300 hover:text-neutral-100 shrink-0"
                         >
                           戻す
                         </button>
                         <button
                           onClick={() => deleteItem(it.id)}
-                          className="text-neutral-600 hover:text-red-400 px-1 shrink-0"
+                          className="text-neutral-400 hover:text-red-400 px-1 shrink-0"
                           aria-label="削除"
                         >
                           ✕
