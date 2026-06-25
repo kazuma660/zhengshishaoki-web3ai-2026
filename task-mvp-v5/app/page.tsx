@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CollisionDetection,
   DndContext,
   DragEndEvent,
   DragStartEvent,
   PointerSensor,
+  pointerWithin,
   TouchSensor,
   useDraggable,
   useDroppable,
@@ -14,7 +16,9 @@ import {
 } from "@dnd-kit/core";
 import { auth, db, googleProvider } from "./lib/firebase";
 import {
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   User,
@@ -40,7 +44,7 @@ type Item = {
 type AddTarget = "pool" | "today" | "tomorrow";
 
 const STORAGE_ITEMS = "tasklog:items:v2";
-const STORAGE_UI = "tasklog:ui:v1";
+const STORAGE_UI = "tasklog:ui:v2";
 const ARCHIVE_AFTER_DAYS = 7;
 const DELETE_AFTER_DAYS = 365;
 const DAY_MS = 86_400_000;
@@ -154,6 +158,66 @@ function RootDropZone({ visible }: { visible: boolean }) {
   );
 }
 
+// ハンドル限定のドラッグ可能ラッパー（今日/明日カード用。入力欄やボタンとは衝突しない）
+function Draggable({
+  id,
+  children,
+}: {
+  id: string;
+  children: (args: {
+    attributes: React.HTMLAttributes<HTMLElement>;
+    listeners: Record<string, (event: React.SyntheticEvent) => void> | undefined;
+    setDragRef: (node: HTMLElement | null) => void;
+    style: React.CSSProperties;
+    isDragging: boolean;
+  }) => React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({ id });
+  const style: React.CSSProperties = {
+    opacity: isDragging ? 0.4 : 1,
+    transform: transform
+      ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
+      : undefined,
+  };
+  return children({
+    attributes: attributes as React.HTMLAttributes<HTMLElement>,
+    listeners: listeners as
+      | Record<string, (event: React.SyntheticEvent) => void>
+      | undefined,
+    setDragRef: setNodeRef,
+    style,
+    isDragging,
+  });
+}
+
+// セクション全体のドロップ枠（ここに離すとそのセクションへ移動）
+function SectionDropZone({
+  id,
+  active,
+  children,
+}: {
+  id: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rounded-lg transition-colors ${
+        isOver
+          ? "ring-2 ring-emerald-400/50 bg-emerald-500/5"
+          : active
+            ? "ring-1 ring-neutral-700/60"
+            : ""
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
 function collectDescendants(items: Item[], rootId: string): Set<string> {
   const result = new Set<string>([rootId]);
   let grew = true;
@@ -174,6 +238,46 @@ function dateKey(ts: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+const ZONE_IDS = new Set(["zone-today", "zone-tomorrow", "zone-pool", "pool-root"]);
+
+// 指/カーソルの位置で判定（吸い付く）。項目の上にいる時は列ゾーンより項目を優先＝
+// 「重ねたら子タスク化／余白に落としたら移動」を登録順に左右されず確定させる。
+const dropCollision: CollisionDetection = (args) => {
+  const within = pointerWithin(args);
+  const itemHit = within.find((c) => !ZONE_IDS.has(String(c.id)));
+  return itemHit ? [itemHit] : within;
+};
+
+// IME変換確定のEnterを誤submitしないためのガード。
+// 変換中(isComposing / keyCode 229)はsubmit扱いにしない。確定後の単独Enterのみ通す。
+function isEnterSubmit(e: React.KeyboardEvent): boolean {
+  return e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229;
+}
+
+function authErrorMessage(code: string): string {
+  switch (code) {
+    case "auth/invalid-email":
+      return "メールアドレスの形式が正しくありません。";
+    case "auth/user-not-found":
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+      return "メールかパスワードが違います。";
+    case "auth/email-already-in-use":
+      return "このメールは既に登録済みです。「ログイン」を試してください。";
+    case "auth/weak-password":
+      return "パスワードは6文字以上にしてください。";
+    case "auth/operation-not-allowed":
+      return "メール/パスワードログインがまだ有効化されていません（Firebase 側の設定が必要）。";
+    case "auth/too-many-requests":
+      return "試行回数が多すぎます。少し待って再度お試しください。";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "";
+    default:
+      return "ログインに失敗しました。もう一度お試しください。";
+  }
+}
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -182,6 +286,12 @@ export default function Home() {
   const [title, setTitle] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [childInputs, setChildInputs] = useState<Record<string, string>>({});
@@ -195,8 +305,14 @@ export default function Home() {
     pool: boolean;
     tomorrow: boolean;
     missed: boolean;
-  }>({ today: false, pool: false, tomorrow: false, missed: false });
+  }>({ today: false, pool: false, tomorrow: false, missed: true });
   const lastRemoteJsonRef = useRef<string>("");
+  // 入力欄・ボタンの上でカードのドラッグが始まらないようにする
+  // PointerSensor=onPointerDown / TouchSensor=onTouchStart の両方を止める必要がある
+  const stopDrag = {
+    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+    onTouchStart: (e: React.TouchEvent) => e.stopPropagation(),
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -212,6 +328,28 @@ export default function Home() {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
   }, []);
+
+  async function handleEmailAuth() {
+    const em = email.trim();
+    if (!em || !password) {
+      setAuthError("メールとパスワードを入力してください。");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      if (authMode === "signup") {
+        await createUserWithEmailAndPassword(auth, em, password);
+      } else {
+        await signInWithEmailAndPassword(auth, em, password);
+      }
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? "";
+      setAuthError(authErrorMessage(code) || "ログインに失敗しました。");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
 
   useEffect(() => {
     try {
@@ -244,6 +382,20 @@ export default function Home() {
     setDraggedId(String(e.active.id));
   }
 
+  function moveToSection(id: string, target: AddTarget) {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const { isToday: _t, isTomorrow: _tm, missedAt: _m, ...rest } = it;
+        if (target === "today") return { ...rest, isToday: true };
+        if (target === "tomorrow") return { ...rest, isTomorrow: true };
+        // pool: フラグに加え parentId と miniStep も外して、独立した「気になる」項目にする
+        const { parentId: _p, miniStep: _ms, ...top } = rest;
+        return top;
+      })
+    );
+  }
+
   function handleDragEnd(e: DragEndEvent) {
     setDraggedId(null);
     const { active, over } = e;
@@ -251,14 +403,15 @@ export default function Home() {
     const activeId = String(active.id);
     const overId = String(over.id);
     if (activeId === overId) return;
-    if (overId === "pool-root") {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.id === activeId ? { ...it, parentId: undefined } : it
-        )
-      );
-      return;
-    }
+
+    // 「落とす場所」だけで決まる：
+    // 列ゾーン or 最上位ゾーンに落とす＝移動
+    if (overId === "zone-today") return moveToSection(activeId, "today");
+    if (overId === "zone-tomorrow") return moveToSection(activeId, "tomorrow");
+    if (overId === "zone-pool" || overId === "pool-root")
+      return moveToSection(activeId, "pool");
+
+    // 別の項目に重ねる＝子タスクにする（気になるへ入れる）
     if (collectDescendants(items, activeId).has(overId)) return;
     const newActiveDepth = getDepth(items, overId) + 1;
     const subtreeHeight = getSubtreeHeight(items, activeId);
@@ -267,7 +420,12 @@ export default function Home() {
       return;
     }
     setItems((prev) =>
-      prev.map((it) => (it.id === activeId ? { ...it, parentId: overId } : it))
+      prev.map((it) => {
+        if (it.id !== activeId) return it;
+        // 子にする時は今日/明日/未達成フラグと一歩を外して、気になるの子に収める
+        const { isToday: _t, isTomorrow: _tm, missedAt: _m, miniStep: _ms, ...rest } = it;
+        return { ...rest, parentId: overId };
+      })
     );
   }
 
@@ -352,6 +510,9 @@ export default function Home() {
     const todayKey = dateKey(Date.now());
     if (lastSeen && lastSeen !== todayKey) {
       const now = Date.now();
+      const newlyMissed = items.filter(
+        (it) => it.isToday && !it.completedAt
+      ).length;
       setItems((prev) =>
         prev.map((it) => {
           if (it.isTomorrow) {
@@ -365,7 +526,11 @@ export default function Home() {
           return it;
         })
       );
-      showToast("日付が変わったので明日やる事を今日に繰り越したよ");
+      showToast(
+        newlyMissed > 0
+          ? `明日やる事を今日に繰り越したよ。未達成が${newlyMissed}件あるよ`
+          : "日付が変わったので明日やる事を今日に繰り越したよ"
+      );
     }
     if (lastSeen !== todayKey) setLastSeen(todayKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -481,12 +646,9 @@ export default function Home() {
   }
 
   function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    // 同じidなら閉じる、違うidなら単一要素に置換（同時に開くのは最大1つ）。
+    // 書きかけテキストは childInputs に残るので閉じても消えない。
+    setExpandedIds((prev) => (prev.has(id) ? new Set() : new Set([id])));
   }
 
   function toggleCollapse(id: string) {
@@ -659,13 +821,14 @@ export default function Home() {
     if (editingId === it.id) {
       return (
         <input
+          {...stopDrag}
           autoFocus
           type="text"
           value={editDraft}
           onChange={(e) => setEditDraft(e.target.value)}
           onBlur={saveEdit}
           onKeyDown={(e) => {
-            if (e.key === "Enter") saveEdit();
+            if (isEnterSubmit(e)) saveEdit();
             if (e.key === "Escape") cancelEdit();
           }}
           className={`${baseClass} rounded border border-emerald-500/50 bg-neutral-950 px-2 py-0.5 outline-none`}
@@ -718,24 +881,28 @@ export default function Home() {
       <DraggableDroppable key={it.id} id={it.id} disabled={dropDisabled}>
         {({ attributes, listeners, setDragRef, setDropRef, style, isOver }) => (
       <li
-        ref={setDropRef}
+        ref={(node) => {
+          setDragRef(node);
+          setDropRef(node);
+        }}
         style={style}
-        className={`rounded-md border bg-neutral-900 ${
-          isOver ? "border-emerald-400 ring-2 ring-emerald-400/30" : "border-neutral-800"
+        {...attributes}
+        {...listeners}
+        className={`rounded-md border bg-neutral-900 cursor-grab active:cursor-grabbing ${
+          isOver ? "border-emerald-400 ring-2 ring-emerald-400/30 bg-emerald-500/10" : "border-neutral-800"
         }`}
       >
         <div className="flex items-start gap-2 px-3 py-2">
-          <button
-            ref={setDragRef as React.Ref<HTMLButtonElement>}
-            {...attributes}
-            {...listeners}
-            className="text-neutral-300 hover:text-neutral-100 text-xs px-1 shrink-0 cursor-grab active:cursor-grabbing touch-none mt-0.5"
-            aria-label="ドラッグして移動"
+          <span
+            title="ドラッグで移動／別の項目に重ねると子タスク"
+            aria-hidden="true"
+            className="text-neutral-500 text-xs px-1 shrink-0 mt-0.5 select-none"
           >
             ⋮⋮
-          </button>
+          </span>
           {hasKids ? (
             <button
+              {...stopDrag}
               onClick={() => toggleCollapse(it.id)}
               className="text-neutral-300 hover:text-neutral-100 text-xs px-1 shrink-0 w-4 text-center mt-0.5"
               aria-label={isCollapsed ? "展開" : "畳む"}
@@ -754,25 +921,31 @@ export default function Home() {
           )}
           {!atMaxDepth && (
             <button
+              {...stopDrag}
               onClick={() => toggleExpand(it.id)}
-              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
+              title="細かくする（分解）"
+              aria-label={isExpanded ? "細かく入力を閉じる" : "細かくする"}
+              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-sm font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0 w-7 text-center leading-none"
             >
-              細かく
+              {isExpanded ? "－" : "＋"}
             </button>
           )}
           <button
+            {...stopDrag}
             onClick={() => toggleToday(it.id)}
             className="rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 shrink-0"
           >
             今日
           </button>
           <button
+            {...stopDrag}
             onClick={() => toggleTomorrow(it.id)}
             className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shrink-0"
           >
             明日
           </button>
           <button
+            {...stopDrag}
             onClick={() => deleteItem(it.id)}
             className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0 mt-0.5"
             aria-label="削除"
@@ -788,6 +961,7 @@ export default function Home() {
         {isExpanded && (
           <div className="border-t border-sky-500/20 bg-sky-500/5 px-3 py-2 flex gap-2">
             <input
+              {...stopDrag}
               type="text"
               value={childInputs[it.id] ?? ""}
               onChange={(e) =>
@@ -797,12 +971,13 @@ export default function Home() {
                 }))
               }
               onKeyDown={(e) => {
-                if (e.key === "Enter") addChild(it.id);
+                if (isEnterSubmit(e)) addChild(it.id);
               }}
               placeholder="数えられる単位で（例：英単語20個）"
               className="flex-1 min-w-0 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs outline-none focus:border-sky-500"
             />
             <button
+              {...stopDrag}
               onClick={() => addChild(it.id)}
               className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-neutral-950 hover:bg-sky-400 shrink-0"
             >
@@ -826,8 +1001,8 @@ export default function Home() {
 
   if (!user) {
     return (
-      <main className="flex-1 bg-neutral-950 text-neutral-100 flex items-center justify-center px-4">
-        <div className="max-w-md w-full space-y-6 text-center">
+      <main className="flex-1 bg-neutral-950 text-neutral-100 flex items-center justify-center px-4 py-8">
+        <div className="max-w-md w-full space-y-5 text-center">
           <h1 className="text-4xl font-bold tracking-tight">
             TaskLog <span className="text-emerald-400">v5</span>
           </h1>
@@ -837,15 +1012,71 @@ export default function Home() {
             複数端末で同期・バックアップするためログインが必要。
           </p>
           <button
-            onClick={() =>
-              signInWithPopup(auth, googleProvider).catch((e) =>
-                console.error("Sign-in failed:", e)
-              )
-            }
-            className="w-full rounded-md bg-emerald-500 px-6 py-3 text-sm font-semibold text-neutral-950 hover:bg-emerald-400"
+            onClick={() => {
+              setAuthError(null);
+              signInWithPopup(auth, googleProvider).catch((e) => {
+                console.error("Sign-in failed:", e);
+                const msg = authErrorMessage((e as { code?: string }).code ?? "");
+                if (msg) setAuthError(msg);
+              });
+            }}
+            disabled={authBusy}
+            className="w-full rounded-md bg-emerald-500 px-6 py-3 text-sm font-semibold text-neutral-950 hover:bg-emerald-400 disabled:opacity-50"
           >
             Google でログイン
           </button>
+
+          <div className="flex items-center gap-3 text-[10px] text-neutral-600">
+            <span className="h-px flex-1 bg-neutral-800" />
+            または メール / パスワード
+            <span className="h-px flex-1 bg-neutral-800" />
+          </div>
+
+          <div className="space-y-2 text-left">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="メールアドレス"
+              autoComplete="email"
+              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-base sm:text-sm outline-none focus:border-emerald-500"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (isEnterSubmit(e)) handleEmailAuth();
+              }}
+              placeholder="パスワード（6文字以上）"
+              autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-base sm:text-sm outline-none focus:border-emerald-500"
+            />
+            {authError && <p className="text-xs text-red-400">{authError}</p>}
+            <button
+              onClick={handleEmailAuth}
+              disabled={authBusy}
+              className="w-full rounded-md border border-emerald-500/50 bg-emerald-500/10 px-6 py-2.5 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              {authBusy
+                ? "処理中..."
+                : authMode === "signin"
+                  ? "メールでログイン"
+                  : "新規登録"}
+            </button>
+            <button
+              onClick={() => {
+                setAuthMode((m) => (m === "signin" ? "signup" : "signin"));
+                setAuthError(null);
+              }}
+              className="w-full text-center text-xs text-neutral-500 hover:text-neutral-300"
+            >
+              {authMode === "signin"
+                ? "アカウント未作成 → 新規登録する"
+                : "アカウントを持っている → ログインする"}
+            </button>
+          </div>
+
           <p className="text-[10px] text-neutral-600">
             データは Firestore に保存・端末間で同期されます
           </p>
@@ -867,9 +1098,7 @@ export default function Home() {
                 {user.email}
               </span>
               <button
-                onClick={() =>
-                  signOut(auth).catch((e) => console.error("Sign-out failed:", e))
-                }
+                onClick={() => setConfirmingLogout(true)}
                 className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 shrink-0"
               >
                 ログアウト
@@ -884,7 +1113,7 @@ export default function Home() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") addItem("pool");
+              if (isEnterSubmit(e)) addItem("pool");
             }}
             placeholder="気になってる事は？（Enter で「置く」）"
             className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-base sm:text-sm outline-none focus:border-emerald-500"
@@ -911,8 +1140,15 @@ export default function Home() {
           </div>
         </section>
 
+        <DndContext
+          sensors={sensors}
+          collisionDetection={dropCollision}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setDraggedId(null)}
+        >
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-4 xl:gap-6">
-        <section className="space-y-2 xl:order-1">
+        <section className="space-y-2 xl:order-1 xl:max-h-[75vh] xl:overflow-y-auto xl:pr-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-emerald-300">
               今日やる事（{todayItems.length}）
@@ -926,7 +1162,7 @@ export default function Home() {
             </button>
           </div>
           {!sectionsCollapsed.today && (
-          <>
+          <SectionDropZone id="zone-today" active={!!draggedId}>
           {todayItems.length === 0 ? (
             <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
               まだ無い。下から「明日やる」を押すか、上の入力で直接置こう。
@@ -934,13 +1170,19 @@ export default function Home() {
           ) : (
             <ul className="space-y-2">
               {todayItems.map((it) => (
+                <Draggable key={it.id} id={it.id}>
+                  {({ attributes, listeners, setDragRef, style }) => (
                 <li
-                  key={it.id}
-                  className="rounded-md border border-emerald-500/50 bg-emerald-500/5 p-3 space-y-2"
+                  ref={setDragRef}
+                  style={style}
+                  {...attributes}
+                  {...listeners}
+                  className="rounded-md border border-emerald-500/50 bg-emerald-500/5 p-3 space-y-2 cursor-grab active:cursor-grabbing"
                 >
                   <div className="flex items-center gap-2">
                     {renderTitleWithParent(it, "flex-1 min-w-0 text-sm font-medium")}
                     <button
+                      {...stopDrag}
                       onClick={() => deleteItem(it.id)}
                       className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                       aria-label="削除"
@@ -949,6 +1191,7 @@ export default function Home() {
                     </button>
                   </div>
                   <input
+                    {...stopDrag}
                     type="text"
                     value={it.miniStep ?? ""}
                     onChange={(e) => setMiniStep(it.id, e.target.value)}
@@ -957,18 +1200,21 @@ export default function Home() {
                   />
                   <div className="flex gap-2">
                     <button
+                      {...stopDrag}
                       onClick={() => doneToday(it.id)}
                       className="flex-1 rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-emerald-400"
                     >
                       やった
                     </button>
                     <button
+                      {...stopDrag}
                       onClick={() => promoteToTomorrow(it.id)}
                       className="flex-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/20"
                     >
                       明日へ
                     </button>
                     <button
+                      {...stopDrag}
                       onClick={() => toggleToday(it.id)}
                       className="flex-1 rounded-md border border-neutral-700 px-3 py-2 text-xs text-neutral-400 hover:text-neutral-200"
                     >
@@ -976,14 +1222,16 @@ export default function Home() {
                     </button>
                   </div>
                 </li>
+                  )}
+                </Draggable>
               ))}
             </ul>
           )}
-          </>
+          </SectionDropZone>
           )}
         </section>
 
-        <section className="space-y-2 xl:order-4">
+        <section className="space-y-2 xl:order-4 xl:max-h-[75vh] xl:overflow-y-auto xl:pr-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-sky-300">
               明日やる事（{tomorrowItems.length}）
@@ -998,6 +1246,7 @@ export default function Home() {
           </div>
           {!sectionsCollapsed.tomorrow && (
           <>
+          <SectionDropZone id="zone-tomorrow" active={!!draggedId}>
           {tomorrowItems.length === 0 ? (
             <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
               まだ無い。前夜に「明日やる」を置いておくと、朝の判断ゼロで動ける。
@@ -1005,13 +1254,19 @@ export default function Home() {
           ) : (
             <ul className="space-y-2">
               {tomorrowItems.map((it) => (
+                <Draggable key={it.id} id={it.id}>
+                  {({ attributes, listeners, setDragRef, style }) => (
                 <li
-                  key={it.id}
-                  className="rounded-md border border-sky-500/30 bg-sky-500/5 p-3 space-y-2"
+                  ref={setDragRef}
+                  style={style}
+                  {...attributes}
+                  {...listeners}
+                  className="rounded-md border border-sky-500/30 bg-sky-500/5 p-3 space-y-2 cursor-grab active:cursor-grabbing"
                 >
                   <div className="flex items-center gap-2">
                     {renderTitleWithParent(it, "flex-1 min-w-0 text-sm font-medium")}
                     <button
+                      {...stopDrag}
                       onClick={() => deleteItem(it.id)}
                       className="text-neutral-400 hover:text-red-400 text-xs px-1 shrink-0"
                       aria-label="削除"
@@ -1020,6 +1275,7 @@ export default function Home() {
                     </button>
                   </div>
                   <input
+                    {...stopDrag}
                     type="text"
                     value={it.miniStep ?? ""}
                     onChange={(e) => setMiniStep(it.id, e.target.value)}
@@ -1028,18 +1284,21 @@ export default function Home() {
                   />
                   <div className="flex gap-2">
                     <button
+                      {...stopDrag}
                       onClick={() => doneToday(it.id)}
                       className="flex-1 rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-emerald-400"
                     >
                       やった
                     </button>
                     <button
+                      {...stopDrag}
                       onClick={() => promoteToToday(it.id)}
                       className="flex-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
                     >
                       今日へ
                     </button>
                     <button
+                      {...stopDrag}
                       onClick={() => toggleTomorrow(it.id)}
                       className="flex-1 rounded-md border border-neutral-700 px-3 py-2 text-xs text-neutral-400 hover:text-neutral-200"
                     >
@@ -1047,15 +1306,18 @@ export default function Home() {
                     </button>
                   </div>
                 </li>
+                  )}
+                </Draggable>
               ))}
             </ul>
           )}
+          </SectionDropZone>
           <p className="text-xs text-neutral-600">日付が変わると自動で「今日やる事」に移ります</p>
           </>
           )}
         </section>
 
-        <section className="space-y-2 xl:order-3">
+        <section className="space-y-2 xl:order-3 xl:max-h-[75vh] xl:overflow-y-auto xl:pr-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-neutral-300">
               気になってる事（{poolRoots.length}）
@@ -1070,12 +1332,7 @@ export default function Home() {
           </div>
           {!sectionsCollapsed.pool && (
           <>
-          <DndContext
-            sensors={sensors}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            onDragCancel={() => setDraggedId(null)}
-          >
+          <SectionDropZone id="zone-pool" active={!!draggedId}>
             <RootDropZone visible={!!draggedId} />
             {poolRoots.length === 0 ? (
               <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
@@ -1086,15 +1343,15 @@ export default function Home() {
                 {poolRoots.map((it) => renderPoolNode(it, 0))}
               </ul>
             )}
-          </DndContext>
+          </SectionDropZone>
           <p className="text-[10px] text-neutral-600">
-            ⋮⋮ をドラッグして並び替え／別の項目の上にドロップで子タスクに、上のゾーンにドロップで一番上の階層に戻せる
+            カードを掴んで、別の項目に重ねると子タスク／今日・明日の列に落とすと移動／上のゾーンで最上位へ戻せる
           </p>
           </>
           )}
         </section>
 
-        <section className="space-y-2 xl:order-2">
+        <section className="space-y-2 xl:order-2 xl:max-h-[75vh] xl:overflow-y-auto xl:pr-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-amber-300">
               未達成（{missedItems.length}）
@@ -1190,6 +1447,7 @@ export default function Home() {
           )}
         </section>
         </div>
+        </DndContext>
 
         {(doneItems.length > 0 || doneArchived.length > 0) && (
           <section className="space-y-2 lg:mx-auto lg:max-w-2xl">
@@ -1269,6 +1527,43 @@ export default function Home() {
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-emerald-500/40 bg-neutral-900 px-4 py-2 text-sm text-emerald-300 shadow-lg z-50">
           {toast}
+        </div>
+      )}
+      {confirmingLogout && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+          onClick={() => setConfirmingLogout(false)}
+        >
+          <div
+            className="w-full max-w-xs rounded-lg border border-neutral-700 bg-neutral-900 p-5 space-y-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-neutral-100">ログアウトする？</p>
+              <p className="text-xs text-neutral-500">
+                再ログインで戻れます。データは消えません。
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmingLogout(false)}
+                className="flex-1 rounded-md border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:text-neutral-100"
+              >
+                やめる
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmingLogout(false);
+                  signOut(auth).catch((e) =>
+                    console.error("Sign-out failed:", e)
+                  );
+                }}
+                className="flex-1 rounded-md bg-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-900 hover:bg-white"
+              >
+                ログアウト
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
