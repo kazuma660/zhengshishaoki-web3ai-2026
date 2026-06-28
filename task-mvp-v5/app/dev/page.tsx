@@ -17,7 +17,7 @@ import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndP
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 
 // ---- v3 データモデル（同じドキュメントの devItems フィールドに保存） --------
-type Sub = { id: string; title: string };
+type Sub = { id: string; title: string; subs?: Sub[] };
 type Node = {
   id: string;
   type: "note" | "task";
@@ -42,6 +42,7 @@ type LegacyItem = {
 };
 
 const MAX_SUB = 5;
+const MAX_DEPTH = 5;
 const DELETE_AFTER_DAYS = 365;
 const ARCHIVE_AFTER_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -73,6 +74,23 @@ function authErrorMessage(code: string): string {
     case "auth/cancelled-popup-request": return "";
     default: return "ログインに失敗した。もう一回試して。";
   }
+}
+
+// 気になることの子ツリー操作（再帰・最大5段ネスト）
+function addSubUnder(subs: Sub[], parentId: string, child: Sub): Sub[] {
+  return subs.map((s) => s.id === parentId
+    ? { ...s, subs: [...(s.subs ?? []), child] }
+    : (s.subs ? { ...s, subs: addSubUnder(s.subs, parentId, child) } : s));
+}
+function removeSubById(subs: Sub[], id: string): Sub[] {
+  return subs.filter((s) => s.id !== id).map((s) => (s.subs ? { ...s, subs: removeSubById(s.subs, id) } : s));
+}
+function editSubById(subs: Sub[], id: string, title: string): Sub[] {
+  return subs.map((s) => s.id === id ? { ...s, title } : (s.subs ? { ...s, subs: editSubById(s.subs, id, title) } : s));
+}
+function findSub(subs: Sub[], id: string): Sub | null {
+  for (const s of subs) { if (s.id === id) return s; const f = s.subs ? findSub(s.subs, id) : null; if (f) return f; }
+  return null;
 }
 
 // 既存 items → v3（notes / tasks）への一回限りの変換
@@ -269,15 +287,21 @@ export default function DevPlanE3() {
     setCapture("");
   }
   function delNote(id: string) { setNodes((prev) => prev.filter((n) => n.id !== id)); }
-  function addSub(noteId: string) {
-    const v = (childInputs[noteId] ?? "").trim(); if (!v) return;
-    const note = nodes.find((n) => n.id === noteId);
-    if (note && (note.subs?.length ?? 0) >= MAX_SUB) { showToast(`子は${MAX_SUB}つまでだよ`); return; }
-    setNodes((prev) => prev.map((n) => n.id === noteId ? { ...n, subs: [...(n.subs ?? []), { id: uid(), title: v }] } : n));
-    setChildInputs((s) => ({ ...s, [noteId]: "" }));
+  function addSub(noteId: string, parentId: string) {
+    const v = (childInputs[parentId] ?? "").trim(); if (!v) return;
+    const note = nodes.find((n) => n.id === noteId && n.type === "note");
+    if (!note) return;
+    const siblings = parentId === noteId ? (note.subs ?? []) : (findSub(note.subs ?? [], parentId)?.subs ?? []);
+    if (siblings.length >= MAX_SUB) { showToast(`子は${MAX_SUB}つまでだよ`); return; }
+    setNodes((prev) => prev.map((n) => {
+      if (n.id !== noteId || n.type !== "note") return n;
+      if (parentId === noteId) return { ...n, subs: [...(n.subs ?? []), { id: uid(), title: v }] };
+      return { ...n, subs: addSubUnder(n.subs ?? [], parentId, { id: uid(), title: v }) };
+    }));
+    setChildInputs((s) => ({ ...s, [parentId]: "" }));
   }
   function delSub(noteId: string, subId: string) {
-    setNodes((prev) => prev.map((n) => n.id === noteId ? { ...n, subs: (n.subs ?? []).filter((x) => x.id !== subId) } : n));
+    setNodes((prev) => prev.map((n) => (n.id === noteId && n.type === "note") ? { ...n, subs: removeSubById(n.subs ?? [], subId) } : n));
   }
 
   // ---- タスクを生やす（メモは残す・同名のアクティブ重複は作らない） ----
@@ -308,9 +332,14 @@ export default function DevPlanE3() {
 
   // ---- 編集（note / task 共通、id で更新） ----
   function startEdit(n: Node) { setEditingId(n.id); setEditDraft(n.title); }
+  function startEditSub(s: Sub) { setEditingId(s.id); setEditDraft(s.title); }
   function saveEdit() {
     if (!editingId) return; const v = editDraft.trim();
-    if (v) setNodes((prev) => prev.map((n) => n.id === editingId ? { ...n, title: v } : n));
+    if (v) setNodes((prev) => prev.map((n) => {
+      if (n.id === editingId) return { ...n, title: v };
+      if (n.type === "note" && n.subs) return { ...n, subs: editSubById(n.subs, editingId, v) };
+      return n;
+    }));
     setEditingId(null); setEditDraft("");
   }
   function cancelEdit() { setEditingId(null); setEditDraft(""); }
@@ -424,6 +453,38 @@ export default function DevPlanE3() {
   const tabSeg = (on: boolean): CSSProperties => ({ flex: "1 1 0", maxWidth: 160, textAlign: "center", padding: "10px 0", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", color: on ? "#fff" : t.faint, background: on ? t.ink : "transparent" });
   const sendBtn = (color: string, bg: string, br: string): CSSProperties => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", color, background: bg, border: `1px solid ${br}`, whiteSpace: "nowrap" });
 
+  const renderSubs = (note: Node, subs: Sub[], depth: number) => (
+    <div style={depth > 1 ? { marginLeft: 12, borderLeft: `1px solid ${t.line}`, paddingLeft: 8 } : undefined}>
+      {subs.map((c) => {
+        const canNest = depth < MAX_DEPTH;
+        const childFull = (c.subs?.length ?? 0) >= MAX_SUB;
+        return (
+          <div key={c.id}>
+            <div style={S.stepRow}>
+              <span style={S.stepBox} />
+              {editingId === c.id ? (
+                <input autoFocus value={editDraft} onChange={(e) => setEditDraft(e.target.value)} onBlur={saveEdit}
+                  onKeyDown={(e) => { if (isEnterSubmit(e)) saveEdit(); if (e.key === "Escape") cancelEdit(); }} style={{ ...S.editInput, flex: "1 1 auto" }} />
+              ) : (
+                <span onClick={() => startEditSub(c)} style={{ ...S.stepTitle, cursor: "text" }} title="クリックで編集">{c.title}</span>
+              )}
+              <span onClick={() => subToToday(note, c)} style={S.stepSend}>今日へ</span>
+              <span onClick={() => delSub(note.id, c.id)} style={S.stepDel}>✕</span>
+            </div>
+            {c.subs && c.subs.length > 0 && renderSubs(note, c.subs, depth + 1)}
+            {canNest && !childFull && (
+              <div style={{ ...S.subInputRow, marginLeft: 12 }}>
+                <span style={{ color: t.accent, fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>＋</span>
+                <input value={childInputs[c.id] ?? ""} onChange={(e) => setChildInputs((s) => ({ ...s, [c.id]: e.target.value }))}
+                  onKeyDown={(e) => { if (isEnterSubmit(e)) addSub(note.id, c.id); }} placeholder="さらに分解…（5段まで）" style={S.subInput} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   // ---- 認証ゲート ----
   if (authLoading) {
     return <main style={{ ...S.root, alignItems: "center", justifyContent: "center" }}><div style={{ color: t.soft, fontSize: 14 }}>読み込み中...</div></main>;
@@ -465,7 +526,7 @@ export default function DevPlanE3() {
     <main style={S.root}>
       <div style={S.topbar}>
         <div>
-          <div style={S.brand}>TaskLog<span style={S.devTag}>develop v3</span></div>
+          <div style={S.brand}>TaskLog</div>
           <div style={S.dateLine}>{dateText}　·　{user.email}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -505,22 +566,15 @@ export default function DevPlanE3() {
 
                   {open && (
                     <div style={S.subWrap}>
-                      {subs.map((c) => (
-                        <div key={c.id} style={S.stepRow}>
-                          <span style={S.stepBox} />
-                          <span style={S.stepTitle}>{c.title}</span>
-                          <span onClick={() => subToToday(note, c)} style={S.stepSend}>今日へ</span>
-                          <span onClick={() => delSub(note.id, c.id)} style={S.stepDel}>✕</span>
-                        </div>
-                      ))}
+                      {subs.length > 0 && renderSubs(note, subs, 1)}
                       {!full ? (
                         <div style={S.subInputRow}>
                           <span style={{ color: t.accent, fontWeight: 700, fontSize: 15, flex: "0 0 auto" }}>＋</span>
                           <input value={childInputs[note.id] ?? ""} onChange={(e) => setChildInputs((s) => ({ ...s, [note.id]: e.target.value }))}
-                            onKeyDown={(e) => { if (isEnterSubmit(e)) addSub(note.id); }} placeholder="やることを1つ（5つまで）" style={S.subInput} />
+                            onKeyDown={(e) => { if (isEnterSubmit(e)) addSub(note.id, note.id); }} placeholder="やることを1つ" style={S.subInput} />
                         </div>
                       ) : (
-                        <div style={S.subFullNote}>5つまで。1つを「今日へ」送ろう。</div>
+                        <div style={S.subFullNote}>子は5つまで。さらに分解は各項目の下から。</div>
                       )}
                     </div>
                   )}
