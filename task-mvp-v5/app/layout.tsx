@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TaskLog v4.3 — 最初のワンステップで、何もしない日を作らない",
+  title: "TaskLog v5 — 最初のワンステップで、何もしない日を作らない",
   description: "前夜に明日やる事を置く。最初の一歩が目の前にある状態で朝を迎えよう。抽象タスクは「細かくする」で数えられる単位に分解。",
   icons: {
     apple: "/apple-touch-icon.png",
@@ -39,9 +39,11 @@ export default function RootLayout({
   return (
     <html
       lang="ja"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased bg-neutral-950`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-neutral-950 text-neutral-100">
+        {children}
+      </body>
     </html>
   );
 }
