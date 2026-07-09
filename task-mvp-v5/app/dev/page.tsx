@@ -163,6 +163,7 @@ export default function DevPlanE3() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [showReview, setShowReview] = useState(false);
+  const [showRest, setShowRest] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [view, setView] = useState<"capture" | "do">("do");
   const [email, setEmail] = useState("");
@@ -539,7 +540,7 @@ export default function DevPlanE3() {
         /* 気になること（消えないメモ）＝書く専用 */
         <div style={S.captureWrap}>
           <div style={S.paneHead}>
-            <span style={S.paneTitle}>気になること</span>
+            <span style={S.paneTitle}>置き場</span>
             <span style={S.paneCount}>{notes.length}</span>
           </div>
           <div style={S.paneSub}>消えない場所。出すことに集中。</div>
@@ -618,13 +619,16 @@ export default function DevPlanE3() {
                 </div>
               </div>
             ) : (
-              <div style={S.emptyFocus}>今日のぶんは、ぜんぶ。<br />「気になる」から「今日へ」送ろう。</div>
+              <div style={S.emptyFocus}>今日のぶんは、ぜんぶ。<br />「置き場」から「今日へ」送ろう。</div>
             )}
 
             {rest.length > 0 && (
               <>
-                <div style={S.sectionHead}>このあとの今日　<span style={S.countDim}>{rest.length}</span></div>
-                {rest.map((it) => (
+                <div onClick={() => setShowRest((v) => !v)} style={{ ...S.sectionHead, cursor: "pointer" }}>
+                  このあとの今日　<span style={S.countDim}>{rest.length}</span>
+                  <span style={{ marginLeft: "auto", ...S.reviewCaret }}>{showRest ? "とじる" : "ひらく"}</span>
+                </div>
+                {showRest && rest.map((it) => (
                   <div key={it.id} style={S.restRow}>
                     <div onClick={() => setFocusId(it.id)} style={S.restMain}>
                       {it.parentTitle && <div style={S.ctxLineSm}>{it.parentTitle} ／</div>}
@@ -686,7 +690,7 @@ export default function DevPlanE3() {
       </div>
 
       <div style={S.tabBar}>
-        <div onClick={() => setView("capture")} style={tabSeg(view === "capture")}>気になる</div>
+        <div onClick={() => setView("capture")} style={tabSeg(view === "capture")}>置き場</div>
         <div onClick={() => setView("do")} style={tabSeg(view === "do")}>やること</div>
       </div>
 
