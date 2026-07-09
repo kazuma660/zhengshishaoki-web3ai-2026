@@ -159,6 +159,7 @@ export default function DevPlanE3() {
   const [capture, setCapture] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [childInputs, setChildInputs] = useState<Record<string, string>>({});
+  const [addChildId, setAddChildId] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -443,7 +444,7 @@ export default function DevPlanE3() {
     ledgerHeadSage: { fontSize: 12.5, fontWeight: 700, color: t.sage, margin: "8px 0 10px" },
     ledgerHeadAmber: { fontSize: 12.5, fontWeight: 700, color: t.amber, margin: "16px 0 8px" },
     doneLine: { fontSize: 13.5, color: t.soft, padding: "4px 0", textDecoration: "line-through", textDecorationColor: t.faint, display: "flex", gap: 8 },
-    doneTick: { color: t.sage, textDecoration: "none" },
+    doneTick: { color: t.sage, fontWeight: 800, textDecoration: "none" },
     missedLine: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13.5, color: t.soft, padding: "4px 0" },
     missedBtn: { fontSize: 11.5, fontWeight: 700, color: t.amber, cursor: "pointer", whiteSpace: "nowrap" },
     countDim: { color: t.faint, fontWeight: 700 },
@@ -474,11 +475,17 @@ export default function DevPlanE3() {
             </div>
             {c.subs && c.subs.length > 0 && renderSubs(note, c.subs, depth + 1)}
             {canNest && !childFull && (
-              <div style={{ ...S.subInputRow, marginLeft: 12 }}>
-                <span style={{ color: t.accent, fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>＋</span>
-                <input value={childInputs[c.id] ?? ""} onChange={(e) => setChildInputs((s) => ({ ...s, [c.id]: e.target.value }))}
-                  onKeyDown={(e) => { if (isEnterSubmit(e)) addSub(note.id, c.id); }} placeholder="さらに分解…（5段まで）" style={S.subInput} />
-              </div>
+              addChildId === c.id ? (
+                <div style={{ ...S.subInputRow, marginLeft: 12 }}>
+                  <span style={{ color: t.accent, fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>＋</span>
+                  <input autoFocus value={childInputs[c.id] ?? ""} onChange={(e) => setChildInputs((s) => ({ ...s, [c.id]: e.target.value }))}
+                    onKeyDown={(e) => { if (isEnterSubmit(e)) addSub(note.id, c.id); if (e.key === "Escape") setAddChildId(null); }}
+                    onBlur={() => { if (!(childInputs[c.id] ?? "").trim()) setAddChildId(null); }}
+                    placeholder="さらに分解…（5段まで）" style={S.subInput} />
+                </div>
+              ) : (
+                <div onClick={() => setAddChildId(c.id)} style={{ marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: t.faint, cursor: "pointer", padding: "3px 0" }}>＋ 分解</div>
+              )
             )}
           </div>
         );
@@ -672,7 +679,7 @@ export default function DevPlanE3() {
               {showReview && (
                 <div style={S.reviewBody}>
                   <div style={S.ledgerHeadSage}>できた　<span style={S.countDim}>{doneTasks.length}</span></div>
-                  {doneTasks.map((it) => <div key={it.id} style={S.doneLine}><span style={S.doneTick}>／</span>{it.title}</div>)}
+                  {doneTasks.map((it) => <div key={it.id} style={S.doneLine}><span style={S.doneTick}>✓</span>{it.title}</div>)}
                   {missedTasks.length > 0 && (
                     <>
                       <div style={S.ledgerHeadAmber}>また今度　<span style={S.countDim}>{missedTasks.length}</span></div>
