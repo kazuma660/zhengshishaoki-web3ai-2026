@@ -356,6 +356,8 @@ export default function DevPlanE3() {
   const archiveTh = useMemo(() => Date.now() - ARCHIVE_AFTER_DAYS * DAY_MS, []);
   const doneTasks = useMemo(() => tByState("done").filter((n) => (n.completedAt ?? 0) >= archiveTh).sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)), [tByState, archiveTh]);
   const missedTasks = useMemo(() => tByState("missed").filter((n) => (n.missedAt ?? 0) >= archiveTh).sort((a, b) => (b.missedAt ?? 0) - (a.missedAt ?? 0)), [tByState, archiveTh]);
+  const todayStart = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }, []);
+  const todayDone = useMemo(() => tByState("done").filter((n) => (n.completedAt ?? 0) >= todayStart).sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)), [tByState, todayStart]);
 
   const focus = useMemo(() => {
     if (!todayTasks.length) return null;
@@ -649,6 +651,15 @@ export default function DevPlanE3() {
                     </div>
                     <div onClick={() => taskDone(it.id)} style={S.miniCheck}>できた</div>
                   </div>
+                ))}
+              </>
+            )}
+
+            {todayDone.length > 0 && (
+              <>
+                <div style={{ ...S.sectionHead, color: t.sage }}>きょう できた　<span style={S.countDim}>{todayDone.length}</span></div>
+                {todayDone.map((it) => (
+                  <div key={it.id} style={S.doneLine}><span style={S.doneTick}>✓</span>{it.title}</div>
                 ))}
               </>
             )}
