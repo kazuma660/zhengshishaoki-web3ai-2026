@@ -659,7 +659,11 @@ export default function DevPlanE3() {
               <>
                 <div style={{ ...S.sectionHead, color: t.sage }}>きょう できた　<span style={S.countDim}>{todayDone.length}</span></div>
                 {todayDone.map((it) => (
-                  <div key={it.id} style={S.doneLine}><span style={S.doneTick}>✓</span>{it.title}</div>
+                  <div key={it.id} style={S.doneLine}>
+                    <span style={S.doneTick}>✓</span>
+                    <span style={{ flex: "1 1 auto" }}>{it.title}</span>
+                    <span onClick={() => delTask(it.id)} style={{ flex: "0 0 auto", color: t.faint, cursor: "pointer", textDecoration: "none", fontSize: 12, padding: "0 4px" }} title="削除">✕</span>
+                  </div>
                 ))}
               </>
             )}
@@ -690,7 +694,13 @@ export default function DevPlanE3() {
               {showReview && (
                 <div style={S.reviewBody}>
                   <div style={S.ledgerHeadSage}>できた　<span style={S.countDim}>{doneTasks.length}</span></div>
-                  {doneTasks.map((it) => <div key={it.id} style={S.doneLine}><span style={S.doneTick}>✓</span>{it.title}</div>)}
+                  {doneTasks.map((it) => (
+                    <div key={it.id} style={S.doneLine}>
+                      <span style={S.doneTick}>✓</span>
+                      <span style={{ flex: "1 1 auto" }}>{it.title}</span>
+                      <span onClick={() => delTask(it.id)} style={{ flex: "0 0 auto", color: t.faint, cursor: "pointer", textDecoration: "none", fontSize: 12, padding: "0 4px" }} title="削除">✕</span>
+                    </div>
+                  ))}
                   {missedTasks.length > 0 && (
                     <>
                       <div style={S.ledgerHeadAmber}>また今度　<span style={S.countDim}>{missedTasks.length}</span></div>
